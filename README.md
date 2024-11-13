@@ -6,6 +6,12 @@ Vous retrouvez ici l'ensemble du code R qui m'a permis l'élaboration de mon mé
 
 Vous trouvez dans chaque dossier le code R associé a chaque domaine de politique publique analysée ainsi que lordqu'ils sont tous fusionnés
 
+__sante.r__: Pour le domaine de la santé
+__banque.r__: Pour le domaine bancaire 
+__security.r__: Pour le domaine sécuritaire
+__social.r__: Pour le domaine de l'aide sociale
+__tous_secteurs.r__: Lorsque que tous les domaine précédemment sont fusionnés ensemble
+
 ## Résumé du mémoire:
 
 Ce mémoire présente un cas d’application du modèle d’apprentissage automatique des arbres de décisions dans les champs des sciences sociales. Il présente de manière technique et précise le fonctionnement de cette méthode et les résultats obtenus.
