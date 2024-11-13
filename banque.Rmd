@@ -1,0 +1,494 @@
+---
+title: "Code R pour l'ensemble des domaines politiques"
+author: "Edgar Mathevet"
+date: "2024-07-18"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r pressure, clean = TRUE }
+#Ensemble de librairies nécessaires
+
+library(rattle)
+library(writexl)
+library(fastDummies) 
+library(QCA)
+library(readxl)
+library(mice)
+library(DescTools)
+
+#Mise en place des libraires nécessaire aux analyses par arbre de décisions
+
+library(tidyverse)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+
+#Libraries nécessaire pour réaliser les courbes de ROC
+
+
+library(pROC)
+library(ROCR)
+library(pracma)
+library(stats)
+library(ROCaggregator)
+
+```
+
+## Analyses du type de nos variables
+
+```{r base de donnees}
+#Téléchargement de la base de données
+memoire <- read.csv("C:/Users/edgar/Desktop/R memoire/data_trein_varone.csv")
+```
+
+Création de la base de données réduite pour notre projet incluant que les variables que l’on souhaite tester
+
+```{r modif base de donne}
+
+base_de_donnee <- c("Sprache", "S1", "sharing", "sector", "std2_trust_fg", "std2_importance", "std2_apps_all", "std2_leftright", "std2_education", "std2_risk", "std2_age")
+
+```
+
+```{r manipulation de la base de donnees}
+
+base_de_donnee_final<- memoire %>% select(all_of(base_de_donnee))
+
+lapply(base_de_donnee_final[, c("Sprache", "S1", "sharing", "sector", "std2_trust_fg", "std2_importance", "std2_apps_all", "std2_leftright", "std2_education", "std2_risk", "std2_age", "sector")], table)
+
+
+```
+
+on va transformer certaines variables "charactere" comme étant des facteurs
+
+```{r}
+hist(base_de_donnee_final$std2_importance)
+barplot(table(base_de_donnee_final$std2_importance))
+str(base_de_donnee_final$std2_importance)
+summary(base_de_donnee_final$std2_trust_fg) #donc des variables continues
+
+base_de_donnee_final$S1 <- factor(base_de_donnee_final$S1, levels = c("Female", "Male"))
+base_de_donnee_final$S1 <- as.numeric(base_de_donnee_final$S1)
+base_de_donnee_final$S1 <- factor(base_de_donnee_final$S1)
+levels(base_de_donnee_final$S1)
+
+base_de_donnee_final$Sprache <-factor(base_de_donnee_final$Sprache, levels = c("Deutsch", "Français"))
+base_de_donnee_final$Sprache <- as.numeric(base_de_donnee_final$Sprache)
+base_de_donnee_final$Sprache <- factor(base_de_donnee_final$Sprache)
+levels(base_de_donnee_final$Sprache)
+
+str(base_de_donnee_final$sector)#il s'agit d'une variable integer
+base_de_donnee_final$sector <- factor(base_de_donnee_final$sector, levels = c("1", "2", "3", "4" ))
+levels(base_de_donnee_final$sector)
+summary(base_de_donnee_final$sector)
+
+
+base_de_donnee_final$sharing <- ifelse(base_de_donnee_final$sharing <= 0.25, 0, 
+                     ifelse(base_de_donnee_final$sharing >= 0.75, 1, NA))
+
+
+base_de_donnee_final$sharing <- factor(base_de_donnee_final$sharing)
+levels(base_de_donnee_final$sharing)
+
+```
+
+######On va commencer par analyser pour tous les domaines politiques
+
+#Création de notre base de données réduite en fonction de notre variable dépendante (Donc les personnes qui partagent leurs données dans tous les domaines politiques
+
+
+
+#sector 1 = social #sector 2 = health #sector 3 = bank #sector 4 = phone
+
+```{r}
+base_de_donnee_final_bank_positive <- subset(base_de_donnee_final, sector == 3)
+base_de_donnee_sector <- c("Sprache", "S1", "sharing", "std2_trust_fg", "std2_importance", "std2_apps_all", "std2_leftright", "std2_education", "std2_risk", "std2_age")
+base_de_donnee_final_bank_positive<- base_de_donnee_final_bank_positive %>% select(all_of(base_de_donnee_sector))
+
+base_de_donnee_sector <- c("Sprache", "S1", "sharing", "std2_trust_fg", "std2_importance", "std2_apps_all", "std2_leftright", "std2_education", "std2_risk", "std2_age")
+base_de_donnee_final_bank_positive<- base_de_donnee_final %>% select(all_of(base_de_donnee_sector))
+
+#On va supprimmer les NA de l'échantillon dans le cas ou il en existerait 
+
+base_de_donnee_final_bank_positive <- na.omit(base_de_donnee_final_bank_positive)
+head(base_de_donnee_final_bank_positive$sharing)
+```
+
+#Commence l'analyse par des observations
+
+```{r}
+
+head(base_de_donnee_final_bank_positive, 3)
+
+summary(base_de_donnee_final_bank_positive)
+
+table(base_de_donnee_final_bank_positive$sharing)
+
+```
+
+#Début de l'analyse par arbre de décision pour tous les domaines politiques
+
+#Création de nos jeux de données
+
+```{r}
+seed=220
+
+set.seed(seed)
+
+ind=sample(3,nrow(base_de_donnee_final_bank_positive),replace=TRUE,prob=c(0.60,0.20, 0.20))
+
+
+base_de_donnee_final_bank_positive.training=base_de_donnee_final_bank_positive[ind==1,]
+
+base_de_donnee_final_bank_positive.validation=base_de_donnee_final_bank_positive[ind==2,]
+
+base_de_donnee_final_bank_positive.test=base_de_donnee_final_bank_positive[ind==3,]
+
+```
+
+#Nous allons utiliser cette méthode qui permet de donner un poids égal entre les classes de notre variable pour éviter que les modèles surajustent.
+
+```{r}
+
+class_proportions <- table(base_de_donnee_final_bank_positive.training$sharing) / nrow(base_de_donnee_final_bank_positive.training)
+print(class_proportions)
+
+weights <- numeric(nrow(base_de_donnee_final_bank_positive.training))
+
+for (level in levels(base_de_donnee_final_bank_positive.training$sharing)) {
+  weights[base_de_donnee_final_bank_positive.training$sharing == level] <- 1 / class_proportions[level]
+}
+
+# Normalisation des poids pour que la somme soit égale au nombre total d'observations
+
+weights <- weights * length(weights) / sum(weights)
+
+
+head(weights)
+
+```
+
+##Maintenant on fait notre arbre pruned
+
+```{r}
+options(max.print=999999)
+set.seed(seed)
+
+#"Comment: In cases where a small change in cp implies a large change in nplits, you may use the “1SE rule”. This rule says that you should look for the minimum of xerror but then go up 1SE (given by “xstd”) because that tree will be less complex." (Jacquet 2022)
+
+#Pour Entropy
+
+decision_tree_sector_large_entropy=rpart(data=base_de_donnee_final_bank_positive.training,sharing~.,method="class",control=rpart.control(minsplit=1,minbucket=1,cp=0),parms=list(split="information"), weights=weights)
+
+rpart.plot(decision_tree_sector_large_entropy,main="Arbre le plus grand pour tous les domaines, entropy",extra=101)
+
+pdf("Arbre le plus grand pour pour tous les secteurs")
+rpart.plot(decision_tree_sector_large_entropy,main="Arbre le plus grand pour pour tous les domaines, entropy",extra=101)
+dev.off()
+
+printcp(decision_tree_sector_large_entropy) 
+
+
+plot(decision_tree_sector_large_entropy$cptable[,"CP"],decision_tree_sector_large_entropy$cptable[,"xerror"],type="S",xlab="CP",ylab="xerror", main="Arbre le plus grand pour pour tous les domaines, entropy (xerror)") 
+
+plot(decision_tree_sector_large_entropy$cptable[,"CP"],decision_tree_sector_large_entropy$cptable[,"nsplit"],type="S",xlab="CP",ylab="nsplit", main="Arbre le plus grand pour pour tous les domaines, entropy (nsplit)")
+
+#Pour Gini 
+
+decision_tree_sector_large_gini=rpart(data=base_de_donnee_final_bank_positive.training,sharing~.,method="class",control=rpart.control(minsplit=1,minbucket=1,cp=0),parms=list(split="gini"),weights=weights)
+
+rpart.plot(decision_tree_sector_large_gini,main="Arbre le plus grand pour tous les domaines, Gini",extra=101)
+
+pdf("Arbre le plus grand pour tous les secteurs, Gini")
+rpart.plot(decision_tree_sector_large_gini,main="Arbre le plus grand pour tous les domaines, Gini",extra=101)
+dev.off()
+
+printcp(decision_tree_sector_large_gini) # plus CP est petit plus l'arbre est complexe, nsplit répresente le fractionnement dans l'arbre
+
+plot(decision_tree_sector_large_gini$cptable[,"CP"],decision_tree_sector_large_gini$cptable[,"xerror"],type="S",xlab="CP",ylab="xerror",main="Arbre le plus grand pour pour tous les domaines, gini (xerror)")
+
+plot(decision_tree_sector_large_gini$cptable[,"CP"],decision_tree_sector_large_gini$cptable[,"nsplit"],type="S",xlab="CP",ylab="nsplit", main="Arbre le plus grand pour pour tous les domaines, gini (nsplit)")
+```
+
+```{r}
+
+#Pour Entropy
+
+cp_best_sector_entropy=decision_tree_sector_large_entropy$cptable[which.min(decision_tree_sector_large_entropy$cptable[,"xerror"]),"CP"]
+
+print(cp_best_sector_entropy)
+
+pruned_tree_sector_entropy=prune(decision_tree_sector_large_entropy,cp=cp_best_sector_entropy)
+
+rpart.plot(pruned_tree_sector_entropy,main="Arbre Pruned pour tous les domaines (Entropy)",extra=101)
+
+pdf("Arbre Pruned pour tous les secteurs (Entropy)")
+rpart.plot(pruned_tree_sector_entropy,main="Arbre Pruned pour tous les domaines (Entropy)",extra=101)
+dev.off()
+
+#Pour Gini
+
+cp_best_sector_gini=decision_tree_sector_large_gini$cptable[which.min(decision_tree_sector_large_gini$cptable[,"xerror"]),"CP"]
+
+print(cp_best_sector_gini)
+
+pruned_tree_sector_gini=prune(decision_tree_sector_large_gini,cp= cp_best_sector_gini)
+
+rpart.plot(pruned_tree_sector_gini,main="Arbre Pruned pour tous les domaines (Gini)",extra=101) 
+
+pdf("Arbre Pruned pour tous les secteurs (Gini)")
+rpart.plot(pruned_tree_sector_gini,main="Arbre Pruned pour tous les domaines (Gini)",extra=101)
+dev.off()
+```
+
+```{r eval=FALSE, include=FALSE}
+#règle 1SE
+pruned_tree_sector_gini=prune(decision_tree_sector_large_gini,cp= 0.0010604)
+
+rpart.plot(pruned_tree_sector_gini_1SE,main="Arbre Pruned 1SE pour tous les domaines (Gini)",extra=101) 
+
+pdf(" 1SE Arbre Pruned pour tous les secteurs (Gini)")
+rpart.plot(pruned_tree_sector_gini_1SE,main="Arbre Pruned 1SE pour tous les domaines (Gini)",extra=101)
+dev.off()
+```
+#Pour établir nos règles 
+```{r}
+rpart.rules(pruned_tree_sector_entropy, cover=TRUE)
+```
+#Nous sauvegardons notre tableau au format excel
+
+```{r}
+rules<-rpart.rules(pruned_tree_sector_gini_1SE, cover=TRUE)
+library(writexl)
+
+rules_df <- as.data.frame(rules)
+
+
+writexl::write_xlsx(rules_df, path = "C:/Users/edgar/Desktop/R memoire/rules_sector.xlsx")
+```
+
+#validation et précision du Modèle
+
+```{r}
+#Pour Gini
+
+predictions_sector_gini_pruned=predict(pruned_tree_sector_gini,newdata=base_de_donnee_final_bank_positive.training,type="class") 
+
+actuals_sector=base_de_donnee_final_bank_positive.training$sharing
+
+confusion.matrix.training_sector_gini_pruned=table(actuals_sector,predictions_sector_gini_pruned)
+
+print(confusion.matrix.training_sector_gini_pruned)
+
+#Pour Entropy
+
+predictions_sector_entropy_pruned=predict(pruned_tree_sector_entropy,newdata=base_de_donnee_final_bank_positive.training,type="class")  
+
+actuals_sector=base_de_donnee_final_bank_positive.training$sharing
+
+confusion.matrix.training_sector_entropy_pruned=table(actuals_sector,predictions_sector_entropy_pruned)
+
+print(confusion.matrix.training_sector_entropy_pruned)
+
+
+#Afficher l'indicateur de précision, et de Cohen et Kappa
+
+#Pour gini
+
+accuracy.training_sector_gini_pruned=sum(diag(confusion.matrix.training_sector_gini_pruned))/sum(confusion.matrix.training_sector_gini_pruned)
+
+print(accuracy.training_sector_gini_pruned) 
+#
+CohenKappa(confusion.matrix.training_sector_gini_pruned, conf.level = 0.95)
+
+#Pour entropy
+
+accuracy.training_sector_entropy_pruned=sum(diag(confusion.matrix.training_sector_entropy_pruned))/sum(confusion.matrix.training_sector_entropy_pruned)
+
+print(accuracy.training_sector_entropy_pruned)
+#
+CohenKappa(confusion.matrix.training_sector_entropy_pruned, conf.level = 0.95)
+```
+
+##Refaisons les calculs pour l'arbre pruned suivant la  règle 1SE 
+
+```{r eval=FALSE, include=FALSE}
+
+#Pour éviter a devoir changer tout le code on va juste remplacer notre arbre pruned par l'arbre pruned 1SE
+
+pruned_tree_sector_gini<-pruned_tree_sector_gini_1SE
+
+```
+
+```{r eval=FALSE, include=FALSE}
+predictions_sector_gini_pruned=predict(pruned_tree_sector_gini,newdata=base_de_donnee_final_bank_positive.training,type="class") 
+
+actuals_sector=base_de_donnee_final_bank_positive.training$sharing
+
+confusion.matrix.training_sector_gini_pruned=table(actuals_sector,predictions_sector_gini_pruned)
+
+print(confusion.matrix.training_sector_gini_pruned)
+
+#
+
+accuracy.training_sector_gini_pruned=sum(diag(confusion.matrix.training_sector_gini_pruned))/sum(confusion.matrix.training_sector_gini_pruned)
+
+print(accuracy.training_sector_gini_pruned) 
+#
+CohenKappa(confusion.matrix.training_sector_gini_pruned, conf.level = 0.95)
+
+```
+
+#Maintenant que nous avons relevé notre indicateur de précision en fonction de notre "Training" dataset nous allons le refaire mais cette fois si avec le "validation" dataset
+
+```{r}
+#Pour Gini
+
+predictions_sector_gini_pruned=predict(pruned_tree_sector_gini,newdata=base_de_donnee_final_bank_positive.validation,type="class")  
+
+actuals_sector=base_de_donnee_final_bank_positive.validation$sharing
+
+confusion.matrix.validation_sector_gini_pruned=table(actuals_sector,predictions_sector_gini_pruned)
+
+print(confusion.matrix.validation_sector_gini_pruned) 
+
+
+#Pour Entropy
+
+predictions_sector_entropy_pruned=predict(pruned_tree_sector_entropy,newdata=base_de_donnee_final_bank_positive.validation,type="class")  
+
+actuals_sector=base_de_donnee_final_bank_positive.validation$sharing
+
+confusion.matrix.validation_sector_entropy_pruned=table(actuals_sector,predictions_sector_entropy_pruned)
+
+print(confusion.matrix.validation_sector_entropy_pruned)
+
+
+#afficher l'indicateur de précision, et l'indicateur de Cohen et Kappa
+
+#pour gini
+
+accuracy.validation_sector_gini_pruned=sum(diag(confusion.matrix.validation_sector_gini_pruned))/sum(confusion.matrix.validation_sector_gini_pruned)
+
+print(accuracy.validation_sector_gini_pruned) 
+
+CohenKappa(confusion.matrix.validation_sector_gini_pruned, conf.level = 0.95)
+
+#pour entropy
+
+accuracy.validation_sector_entropy_pruned=sum(diag(confusion.matrix.validation_sector_entropy_pruned))/sum(confusion.matrix.validation_sector_entropy_pruned)
+
+print(accuracy.validation_sector_entropy_pruned) 
+
+CohenKappa(confusion.matrix.validation_sector_entropy_pruned, conf.level = 0.95)
+
+```
+
+#Maintenant que nous avons relevé notre indicateur de précision en fonction de notre validation dataset nous allons le refaire mais cette fois si avec le "Test" dataset
+
+```{r}
+#Pour Gini
+
+predictions_sector_gini_pruned=predict(pruned_tree_sector_gini,newdata=base_de_donnee_final_bank_positive.test,type="class")  
+
+actuals_sector=base_de_donnee_final_bank_positive.test$sharing
+
+confusion.matrix.test_sector_gini_pruned=table(actuals_sector,predictions_sector_gini_pruned)
+
+print(confusion.matrix.test_sector_gini_pruned) 
+
+
+#Pour Entropy
+
+predictions_sector_entropy_pruned=predict(pruned_tree_sector_entropy,newdata=base_de_donnee_final_bank_positive.test,type="class")  
+
+actuals_sector=base_de_donnee_final_bank_positive.test$sharing
+
+confusion.matrix.test_sector_entropy_pruned=table(actuals_sector,predictions_sector_entropy_pruned)
+
+print(confusion.matrix.test_sector_entropy_pruned)
+
+
+#afficher l'indicateur de précision, et l'indicateur de Cohen et Kappa
+
+#pour gini
+
+accuracy.test_sector_gini_pruned=sum(diag(confusion.matrix.test_sector_gini_pruned))/sum(confusion.matrix.test_sector_gini_pruned)
+
+print(accuracy.test_sector_gini_pruned) 
+
+CohenKappa(confusion.matrix.test_sector_gini_pruned, conf.level = 0.95)
+
+#pour entropy
+
+accuracy.test_sector_entropy_pruned=sum(diag(confusion.matrix.test_sector_entropy_pruned))/sum(confusion.matrix.test_sector_entropy_pruned)
+
+print(accuracy.test_sector_entropy_pruned) 
+
+CohenKappa(confusion.matrix.test_sector_entropy_pruned, conf.level = 0.95)
+```
+
+#Maintenant que nous avons obtenus notre arbre nous allons pouvoir tester leur efficacité en calculant leurs AUCs
+
+```{r}
+
+#Calcul de l'AUC multiclasse selon Hand and Till (2001)
+
+#pour le Training dataset
+
+predictions <- predict(pruned_tree_sector_entropy, base_de_donnee_final_bank_positive.training, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_bank_positive.training$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_training_entropy<-auc(roc.multi.arbre)
+
+# pour le Validation dataset
+
+predictions <- predict(pruned_tree_sector_entropy, base_de_donnee_final_bank_positive.validation, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_bank_positive.validation$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_validation_entropy<-auc(roc.multi.arbre)
+
+# pour le test dataset
+
+predictions <- predict(pruned_tree_sector_entropy, base_de_donnee_final_bank_positive.test, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_bank_positive.test$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_test_entropy<-auc(roc.multi.arbre)
+```
+```{r}
+#Pour Gini
+
+#pour le Training dataset
+
+predictions <- predict(pruned_tree_sector_gini, base_de_donnee_final_bank_positive.training, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_bank_positive.training$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_training_gini<-auc(roc.multi.arbre)
+
+# pour le Validation dataset
+
+predictions <- predict(pruned_tree_sector_gini, base_de_donnee_final_bank_positive.validation, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_bank_positive.validation$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_validation_gini<-auc(roc.multi.arbre)
+
+# pour le test dataset
+
+predictions <- predict(pruned_tree_sector_gini, base_de_donnee_final_bank_positive.test, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_bank_positive.test$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_test_gini<-auc(roc.multi.arbre)
+```
+
+
