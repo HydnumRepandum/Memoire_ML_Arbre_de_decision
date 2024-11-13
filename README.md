@@ -4,13 +4,13 @@ Vous retrouvez ici l'ensemble du code R qui m'a permis l'élaboration de mon mé
 
 ## Structure du dépot:
 
-Vous trouvez dans chaque dossier le code R associé a chaque domaine de politique publique analysée ainsi que lordqu'ils sont tous fusionnés
+Dans la branche principale, vous trouverez le code R (au format Markdown) pour chaque domaine de politique publique analysé, ainsi qu'une analyse commune intégrant tous les domaines lorsque ceux-ci sont fusionnés.
 
-__sante.r__: Pour le domaine de la santé  
-__banque.r__: Pour le domaine bancaire  
-__security.r__: Pour le domaine sécuritaire  
-__social.r__: Pour le domaine de l'aide sociale  
-__tous_secteurs.r__: Lorsque que tous les domaine précédemment sont fusionnés ensemble  
+__sante.Rmd__: Pour le domaine de la santé  
+__banque.Rmd__: Pour le domaine bancaire  
+__security.Rmd__: Pour le domaine sécuritaire  
+__social.Rmd__: Pour le domaine de l'aide sociale  
+__tous_secteurs.Rmd__: Lorsque que tous les domaine précédemment sont fusionnés ensemble  
 
 ## Résumé du mémoire:
 
