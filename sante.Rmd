@@ -1,0 +1,1247 @@
+---
+title: "Code R pour le domaine de la santé"
+author: "Edgar Mathevet"
+date: "2024-07-18"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r pressure, clean = TRUE }
+#Ensemble de librairies nécessaires a notre code 
+
+library(rattle)
+library(writexl)
+library(fastDummies) 
+library(QCA)
+library(readxl)
+library(mice)
+library(DescTools)
+
+#Mise en place des libraires nécessaire aux analyses par arbre de décisions
+
+library(tidyverse)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+
+#Libraries nécessaire pour réaliser les courbes de ROC et AUCs (comprennent celles utilisés dans nos expérimentations)
+
+library(pROC)
+library(ROCR)
+library(pracma)
+library(stats)
+library(ROCaggregator)
+
+```
+
+## Analyses du type de nos variables
+
+Etant donné que nous avons des variables catégorielles ordinales en variable dépendante il semble, selon Ramasubramanian et Singh (2019), préférable de faire un arbre de classification que de régression
+
+```{r base de donnees}
+#Téléchargement de la base de données
+memoire <- read.csv("C:/Users/edgar/Desktop/R memoire/data_trein_varone.csv")
+```
+
+**Création de la base de données réduite pour notre projet incluant que les variables que l’on souhaite tester.**
+
+```{r modif base de donne}
+
+base_de_donnee <- c("Sprache", "S1", "sharing", "sector", "std2_trust_fg", "std2_importance", "std2_apps_all", "std2_leftright", "std2_education", "std2_risk", "std2_age")
+
+```
+
+```{r manipulation de la base de donnees}
+
+base_de_donnee_final<- memoire %>% select(all_of(base_de_donnee))
+
+lapply(base_de_donnee_final[, c("Sprache", "S1", "sharing", "sector", "std2_trust_fg", "std2_importance", "std2_apps_all", "std2_leftright", "std2_education", "std2_risk", "std2_age")], table)
+
+```
+
+##On va transformer certaines variables "charactere" comme étant des facteurs
+
+```{r}
+
+hist(base_de_donnee_final$std2_apps_all)
+barplot(table(base_de_donnee_final$std2_apps_all))
+length(unique(base_de_donnee_final$std2_apps_all))
+str(base_de_donnee_final$std2_apps_all)
+View(base_de_donnee_final$std2_apps_all)
+table(base_de_donnee_final$std2_trust_fg)
+view(base_de_donnee_final$std2_trust_fg)
+summary(base_de_donnee_final$std2_trust_fg)
+
+base_de_donnee_final$S1 <- factor(base_de_donnee_final$S1, levels = c("Female", "Male"))
+base_de_donnee_final$S1 <- as.numeric(base_de_donnee_final$S1)
+base_de_donnee_final$S1 <- factor(base_de_donnee_final$S1)
+levels(base_de_donnee_final$S1)
+summary(base_de_donnee_final$Sprache)
+summary(base_de_donnee_final$S1)
+base_de_donnee_final$Sprache <-factor(base_de_donnee_final$Sprache, levels = c("Deutsch", "Français"))
+base_de_donnee_final$Sprache <- as.numeric(base_de_donnee_final$Sprache)
+base_de_donnee_final$Sprache <- factor(base_de_donnee_final$Sprache)
+levels(base_de_donnee_final$Sprache)
+
+base_de_donnee_final$sharing <- factor(base_de_donnee_final$sharing, ordered = TRUE, levels = c( "0", "0.25",  "0.5", "0.75", "1" ))
+levels(base_de_donnee_final$sharing)
+
+```
+
+#On va commencer par analyser pour le domaine de la politique de sante (ce document) puis ensuite nous ferons pour les autres domaines et finalement nous les regrouperons tous les domaines politiques.
+
+#Création de notre base de données réduite en fonction de notre variable dépendante  (Donc les personnes qui partagent leurs données dans le domaine de politique de la santé)
+
+#sector 1 = social #sector 2 = health #sector 3 = bank #sector 4 = phone
+
+```{r}
+base_de_donnee_final_sante_positive <- subset(base_de_donnee_final, sector == 2)
+base_de_donnee_sector <- c("Sprache", "S1", "sharing", "std2_trust_fg", "std2_importance", "std2_apps_all", "std2_leftright", "std2_education", "std2_risk", "std2_age")
+base_de_donnee_final_sante_positive<- base_de_donnee_final_sante_positive %>% select(all_of(base_de_donnee_sector))
+
+
+#On va supprimmer les NA de l'echantillon dans le cas ou il en existerait 
+
+base_de_donnee_final_sante_positive <- na.omit(base_de_donnee_final_sante_positive)
+```
+
+#On Commence notre analyse par des observations de notre base de données
+
+```{r}
+
+head(base_de_donnee_final_sante_positive, 3)
+
+summary(base_de_donnee_final_sante_positive)
+
+table(base_de_donnee_final_sante_positive$sharing)
+
+#Grace a "Table", on se rend compte que nous avons un problème  pour notre variable dépendante car, on voit qu'il y a une forte variance entre nos classes ce qui peut amener a des problèmes pour notre modèle d'apprentissage automatique
+
+```
+
+#On voit que nous avons des grandes variances entre les catégories de notre variable dépendante nous allons essayer de régler ça.
+
+#Face à ce problème de variance dans nos variables dépendantes il existe deux moyens pour le rectifier, soit en ajustement directement la base de donnee (ci dessous), ou d'utiliser la fonction weight de rpart, pour mettre des coefficients aux catégories de notre variable. Dans notre cas nous utiliserons la fonction weight et non le SMOTE mais nous laissons le code des deux
+
+"The SMOTE algorithm works by selecting a minority class instance at random and finding its k nearest minority class neighbours."(Van Otten 2023) <https://spotintelligence.com/2023/02/17/smote-oversampling-python-r/>
+
+```{r eval=FALSE}
+install.packages("ROCR")
+install.packages( "C:/Users/edgar/downloads/DMwR_0.4.1.tar.gz", repos=NULL, type="source" )
+```
+
+```{r eval=FALSE}
+library(DMwR)
+library(caret)
+
+base_de_donnee_final_sante_positive <- SMOTE(sharing ~ .,base_de_donnee_final_sante_positive, k = 5, perc.over = 100, perc.under = 200)
+# "If the value of k is too low, the synthetic samples may not capture the full diversity of the minority class, while if it is too high, the synthetic samples may not be sufficiently diverse." (Van Otten 2023) #https://spotintelligence.com/2023/02/17/smote-oversampling-python-r/
+#perc.over de combien de pourcentage on augmente la catégorie minoritaire
+#perc.under de combien on diminue la catégorie domiante
+
+summary(base_de_donnee_final_sante_positive)
+```
+
+##Nous établissons des diagrammes de dispersions en fonction de chacune des variables
+
+```{r}
+
+my_cols=c("red","green","blue","yellow","violet") #chaque couleur représentant une catégorie de notre variable salience
+
+pairs(base_de_donnee_final_sante_positive[,1:10],pch=19,cex=0.5,col=my_cols[base_de_donnee_final_sante_positive$sharing]) #le 10 représente le nombre de variable indépendante donc peut être réduit en fonction du choix dans la base de données
+
+
+pdf("Pairwise scatterplot sante")
+pairs(base_de_donnee_final_sante_positive[,1:10],pch=19,cex=0.5,col=my_cols[base_de_donnee_final_sante_positive$sharing])
+dev.off()
+
+#Dans notre cas nous voyons qu'il n'y a pas de séparation claire entre les classes de notre variables dépendante et nos variables indépendantes. Voir une séparation claire aurait pu nous etre un indicie pour savoir quelles variables nous allions retrouver dans nos arbres
+```
+
+#Début de l'analyse par arbre de décision pour le domaine santé
+
+"Roughly you should take 60% of your data as the training dataset, 20% as the validation dataset and the remaining 20% as the testing dataset. These numbers are common values but subjective so you may choose different values." (Philippe Jacquet 2023: 4)
+
+#Création de nos trois jeux de données qui serviront a entrainer les modeles et a les évaluer
+
+```{r}
+seed=220
+
+set.seed(seed)
+
+ind=sample(3,nrow(base_de_donnee_final_sante_positive),replace=TRUE,prob=c(0.60,0.20, 0.20)) #le 0.6 représente la part de mes données utilisées pour l'entrainement puis 0.2 pour la validation et 0.2 pour le tester
+
+
+base_de_donnee_final_sante_positive.training=base_de_donnee_final_sante_positive[ind==1,]
+
+base_de_donnee_final_sante_positive.validation=base_de_donnee_final_sante_positive[ind==2,]
+
+base_de_donnee_final_sante_positive.test=base_de_donnee_final_sante_positive[ind==3,]
+
+```
+
+#Sur les conseils de Jacquet, nous allons utiliser cette méthode qui permet de donner un poids égal entre les classes de notre variabledépendante pour éviter que les modèles sur-ajustent.
+
+```{r}
+
+class_proportions <- table(base_de_donnee_final_sante_positive.training$sharing) / nrow(base_de_donnee_final_sante_positive.training)
+print(class_proportions)
+
+weights <- numeric(nrow(base_de_donnee_final_sante_positive.training))
+
+for (level in levels(base_de_donnee_final_sante_positive.training$sharing)) {
+  weights[base_de_donnee_final_sante_positive.training$sharing == level] <- 1 / class_proportions[level]
+}
+
+# Normalisation des poids pour que la somme soit égale au nombre total d'observations
+
+weights <- weights * length(weights) / sum(weights)
+
+
+head(weights)
+
+```
+#Maintenant que nous avons nos jeux de donnees ponderees nous alons pouvoir commencer nos premieres analuses par arbre de classification 
+
+**Nos arbres de classifications en utilisant des paramètres subjectifs**
+
+#(Ces arbres ne sont pas utilisés dans nos analyses, ils sont utiles dans une approche exploratoire)
+
+```{r}
+set.seed(seed)
+
+#Pour Gini
+
+decision_tree_sante_gini=rpart(data=base_de_donnee_final_sante_positive.training,sharing~.,method="class", control=rpart.control(minsplit=50,minbucket=20),parms=list(split="gini"), weights=weights)
+
+#Pour l'Entropy
+
+decision_tree_sante_entropy=rpart(data=base_de_donnee_final_sante_positive.training,sharing~.,method="class",control=rpart.control(minsplit=50,minbucket=20),parms=list(split="information"),weights=weights)
+
+#Deux hyperparamètres subjectifs possible qui permettent de limiter que le Modèle underfit ou overfit, elles sont déterminées de manière inductive:
+
+#"Minsplit" parameter which is the minimum number of elements that must exist in a node in order for a split to be attempted." (Philippe Jacquet 2023, 11)
+
+#"Minbucket" parameter which is the minimum number of elements in any terminal leaf." (Philippe Jacquet 2023, 11)
+
+
+#method="class" permet de faire un arbre de classification si on souhaite faire un arbre de régression alors nous devons indiquer method="anova
+
+#parms=list(split="gini") représente si on utilise l'entropy ou gini comme impurity index, pour sélectionner l'entropy il faut remplacer "gini" par "information"
+
+```
+
+#Représentation graphique de nos arbres de classification construit a partir de critere subjectif
+
+```{r}
+pdf("Test arbre a decision gini sante")
+rpart.plot(decision_tree_sante_gini,main="Arbre de Classification pour le domaine de la santé (Gin)",extra=101)
+dev.off()
+
+rpart.plot(decision_tree_sante_gini,main="Arbre de Classification pour le domaine de la santé (Gini)",extra=101)
+```
+
+```{r}
+"red"
+
+pdf("Test arbre a decision entropy sante")
+rpart.plot(decision_tree_sante_entropy,main="Arbre de Classification pour le domaine de la santé (Entropy)",extra=101)
+dev.off()
+
+rpart.plot(decision_tree_sante_entropy,main="Arbre de Classification pour le domaine de la santé (Entropy)",extra=101)
+```
+
+#Testons la performance de nos arbres de classifications classiques
+
+```{r}
+#Pour Gini
+
+predictions_sante_gini=predict(decision_tree_sante_gini,newdata=base_de_donnee_final_sante_positive.training,type="class")
+
+actuals_sante=base_de_donnee_final_sante_positive.training$sharing
+
+confusion.matrix.training_sante_gini=table(actuals_sante,predictions_sante_gini)
+
+print(confusion.matrix.training_sante_gini)
+
+#Pour Entropy
+
+predictions_sante_entropy=predict(decision_tree_sante_entropy,newdata=base_de_donnee_final_sante_positive.training,type="class")
+
+actuals_sante=base_de_donnee_final_sante_positive.training$sharing
+
+confusion.matrix.training_sante_entropy=table(actuals_sante,predictions_sante_entropy)
+
+print(confusion.matrix.training_sante_entropy)
+
+
+#afficher l'indicateur de précision, et le coefficient Kappa de Cohen
+#(Signorell 2024b, 108-111)
+
+#https://cran.r-project.org/web/packages/DescTools/DescTools.pdf#page=106.24
+
+#Pour gini
+
+accuracy.training_sante_gini=sum(diag(confusion.matrix.training_sante_gini))/sum(confusion.matrix.training_sante_gini)
+
+print(accuracy.training_sante_gini) 
+#
+CohenKappa(confusion.matrix.training_sante_gini, conf.level = 0.95)
+
+#Pour entropy
+
+accuracy.training_sante_entropy=sum(diag(confusion.matrix.training_sante_entropy))/sum(confusion.matrix.training_sante_entropy)
+
+print(accuracy.training_sante_entropy)
+#
+CohenKappa(confusion.matrix.training_sante_entropy, conf.level = 0.95)
+```
+
+#Nous voyons que nous obtenons de meilleurs résultats de précision avec l'entropy, mais il n'utilise pas toutes les catégories (que 3 sur les 5), donc ce sera le Modèle construit avec la métrique de gini qui est préférable selon nous.
+
+```{r}
+"violet"
+```
+
+#Maintenant que nous avons relevé notre indicateur de précision en fonction de notre “training dataset” nous allons le refaire mais cette fois-ci avec le “validation dataset”. Ceci nous permet de voir comment se comporte notre modèle sur des données sur lesquelles il n’a pas été entraîné dessus.
+
+```{r}
+#Pour Gini
+
+predictions_sante_gini=predict(decision_tree_sante_gini,newdata=base_de_donnee_final_sante_positive.validation,type="class")  
+
+actuals_sante=base_de_donnee_final_sante_positive.validation$sharing
+
+confusion.matrix.validation_sante_gini=table(actuals_sante,predictions_sante_gini)
+
+print(confusion.matrix.validation_sante_gini) 
+
+#Pour Entropy
+
+predictions_sante_entropy=predict(decision_tree_sante_entropy,newdata=base_de_donnee_final_sante_positive.validation,type="class") 
+
+actuals_sante=base_de_donnee_final_sante_positive.validation$sharing
+
+confusion.matrix.validation_sante_entropy=table(actuals_sante,predictions_sante_entropy)
+
+print(confusion.matrix.validation_sante_entropy)
+
+
+#affiché l'indicateur de précision, et l'indicateur de Cohen et Kappa
+
+#pour gini
+
+accuracy.validation_sante_gini=sum(diag(confusion.matrix.validation_sante_gini))/sum(confusion.matrix.validation_sante_gini)
+
+print(accuracy.validation_sante_gini) 
+
+CohenKappa(confusion.matrix.validation_sante_gini, conf.level = 0.95)
+
+#pour entropy
+
+accuracy.validation_sante_entropy=sum(diag(confusion.matrix.validation_sante_entropy))/sum(confusion.matrix.validation_sante_entropy)
+
+print(accuracy.validation_sante_entropy) 
+
+CohenKappa(confusion.matrix.validation_sante_entropy, conf.level = 0.95)
+
+#On voit que dans notre cas que c'est l'entropy qui donne toujours le meilleur résultat, mais pour autant il reste préférable d’utiliser Gini.
+"violet"
+```
+
+##Maintenant on fait la même méthode mais on change les facteurs pour trouver le meilleur arbre en utilisant pas des hyperparamètres subjectif (minsplit; minbucket) mais à travers une méthode plus objective (l’erreur OBB et le Complexity Parameter). 
+
+**Réalisations de nos Arbres Pruned**
+
+##D’abord nous allons réaliser les arbres sans aucune condition de fin d'arborescence puis ensuite nous utiliserons la plus petite “cross-validation error” comme condition discriminante pour construire notre arbre pruned à travers le paramètre de complexité (CP).
+
+```{r}
+options(max.print=999999)
+```
+
+```{r}
+set.seed(seed)
+
+#"Comment: In cases where a small change in cp implies a large change in nplits, you may use the “1SE rule”. This rule says that you should look for the minimum of xerror but then go up 1SE (given by “xstd”) because that tree will be less complex." (Jacquet 2022)
+
+#Pour Entropy
+
+#Nous allons faire notre arbre sans aucune règle pour le stopper dans ses divisions, il sera donc extrêmement complexe.
+
+
+decision_tree_sante_large_entropy=rpart(data=base_de_donnee_final_sante_positive.training,sharing~.,method="class",control=rpart.control(minsplit=1,minbucket=1,cp=0),parms=list(split="information"), weights=weights)
+
+rpart.plot(decision_tree_sante_large_entropy,main="L'arbre le plus grand pour le domaine de la santé, entropy",extra=101)
+
+pdf("l'arbre le plus grand pour la sante entropy")
+rpart.plot(decision_tree_sante_large_entropy,main="L'arbre le plus grand pour le domaine de la santé, entropy",extra=101)
+dev.off()
+
+printcp(decision_tree_sante_large_entropy) # plus CP est petit plus l'arbre est complexe, nsplit représente le nombre de divisions dans l'arbre.
+
+#Nous allons, de ce classeur, produire deux tableaux qui nous permettront de voir comment se comporte notre arbre. Ceci nous permettra ainsi de prendre des décisions le mieux informé, notamment sur l’application ou non de la règle “1SE”. 
+
+plot(decision_tree_sante_large_entropy$cptable[,"CP"],decision_tree_sante_large_entropy$cptable[,"xerror"],type="S",xlab="CP",ylab="xerror", main="L'arbre le plus grand pour le domaine de la santé, entropy (xerror)") 
+
+plot(decision_tree_sante_large_entropy$cptable[,"CP"],decision_tree_sante_large_entropy$cptable[,"nsplit"],type="S",xlab="CP",ylab="nsplit", main="L'arbre le plus grand pour le domaine de la santé, entropy (nsplit)")
+
+#Pour Gini 
+
+decision_tree_sante_large_gini=rpart(data=base_de_donnee_final_sante_positive.training,sharing~.,method="class",control=rpart.control(minsplit=1,minbucket=1,cp=0),parms=list(split="gini"),weights=weights)
+
+rpart.plot(decision_tree_sante_large_gini,main="L'arbre le plus grand pour le domaine de la santé, gini",extra=101)
+
+pdf("l'arbre le plus grand pour la sante gini")
+rpart.plot(decision_tree_sante_large_gini,main="L'arbre le plus grand pour le domaine de la santé, gini",extra=101)
+dev.off()
+
+printcp(decision_tree_sante_large_gini) # plus CP est petit plus l'arbre est complexe, nsplit représente le fractionnement dans l'arbre
+
+
+plot(decision_tree_sante_large_gini$cptable[,"CP"],decision_tree_sante_large_gini$cptable[,"xerror"],type="S",xlab="CP",ylab="xerror",main="L'arbre le plus grand pour le domaine de la santé, gini (xerror)")
+
+plot(decision_tree_sante_large_gini$cptable[,"CP"],decision_tree_sante_large_gini$cptable[,"nsplit"],type="S",xlab="CP",ylab="nsplit", main="L'arbre le plus grand pour le domaine de la santé, gini (nsplit)")
+```
+
+```{r}
+
+#Maintenant que nous avons fait nos graphiques et obtenu notre tableau, nous allons pouvoir déterminer quel est le meilleur paramètre de complexité pour “pruned” notre arbre tout en ayant une faible erreur de validation croisée.
+
+#Pour Entropy
+
+cp_best_sante_entropy=decision_tree_sante_large_entropy$cptable[which.min(decision_tree_sante_large_entropy$cptable[,"xerror"]),"CP"]
+
+print(cp_best_sante_entropy)
+
+pruned_tree_sante_entropy=prune(decision_tree_sante_large_entropy,cp=cp_best_sante_entropy)
+
+rpart.plot(pruned_tree_sante_entropy,main="Arbre Pruned pour le domaine de la santé (Entropy)",extra=101)
+
+pdf("Arbre Pruned pour le secteur santé (Entropy)")
+rpart.plot(pruned_tree_sante_entropy,main="Arbre Pruned pour le domaine de la santé (Entropy)",extra=101)
+dev.off()
+
+#Pour Gini
+
+cp_best_sante_gini=decision_tree_sante_large_gini$cptable[which.min(decision_tree_sante_large_gini$cptable[,"xerror"]),"CP"]
+
+print(cp_best_sante_gini)
+
+pruned_tree_sante_gini=prune(decision_tree_sante_large_gini,cp=cp_best_sante_gini)
+
+rpart.plot(pruned_tree_sante_gini,main="Arbre Pruned pour le domaine de la santé (Gini)",extra=101) #donc on prend le meilleur cp obtenus selon nsplit et les erreurs 
+
+pdf("Arbre Pruned pour le secteur santé (Gini)")
+rpart.plot(pruned_tree_sante_gini,main="Arbre Pruned pour le domaine de la santé (Gini)",extra=101)
+dev.off()
+
+#Nous voyons que, dans nos un de nos cas (entropy), nous avons obtenu un arbre plus complexe que celui obtenu avec des paramètres subjectifs. Et à contrario, pour Gini nous avons obtenu un arbre moins complexe. Nous voyons ainsi l’importance d’utiliser ces critères objectifs.
+
+```
+
+#Maintenant que nous avons notre arbre pruned, nous allons en tirer ses règles sous-jacentes (nous avons déjà sélectionné la métrique qui a la meilleure performance: entropy). 
+
+```{r}
+rpart.rules(pruned_tree_sante_entropy, cover=TRUE)
+```
+
+#Nous obtenons donc des règles pour chacune de nos classes de notre variable dépendante. Ces règles représentent le cheminement du nœud racine à un nœud feuille. Ces règles se basant in-fine sur une proportion plus ou moins grande de notre base de données (allant de 36% à 1%).
+
+#Testons la performance de nos arbres pruned.
+
+```{r}
+#Pour Gini
+
+predictions_sante_gini_pruned=predict(pruned_tree_sante_gini,newdata=base_de_donnee_final_sante_positive.training,type="class") 
+
+actuals_sante=base_de_donnee_final_sante_positive.training$sharing
+
+confusion.matrix.training_sante_gini_pruned=table(actuals_sante,predictions_sante_gini_pruned)
+
+print(confusion.matrix.training_sante_gini_pruned) #De cette matrice de confusion nous pourrons déterminer la précision (“accuracy”) de notre modèle. 
+
+#Pour Entropy
+
+predictions_sante_entropy_pruned=predict(pruned_tree_sante_entropy,newdata=base_de_donnee_final_sante_positive.training,type="class")  
+
+actuals_sante=base_de_donnee_final_sante_positive.training$sharing
+
+confusion.matrix.training_sante_entropy_pruned=table(actuals_sante,predictions_sante_entropy_pruned)
+
+print(confusion.matrix.training_sante_entropy_pruned)
+
+
+#Afficher l'indicateur de précision, et le coefficient de Kappa de Cohen
+
+#Pour gini
+
+accuracy.training_sante_gini_pruned=sum(diag(confusion.matrix.training_sante_gini_pruned))/sum(confusion.matrix.training_sante_gini_pruned)
+
+print(accuracy.training_sante_gini_pruned) 
+#
+CohenKappa(confusion.matrix.training_sante_gini_pruned, conf.level = 0.95)
+
+#Pour entropy
+
+accuracy.training_sante_entropy_pruned=sum(diag(confusion.matrix.training_sante_entropy_pruned))/sum(confusion.matrix.training_sante_entropy_pruned)
+
+print(accuracy.training_sante_entropy_pruned)
+#
+CohenKappa(confusion.matrix.training_sante_entropy_pruned, conf.level = 0.95)
+```
+
+#Nous voyons que nous obtenons de meilleurs résultats de précision avec l’entropy donc ce sera le modèle que nous conserverons pour l’arbre pruned ( de plus il utilise toutes les classes de notre variable dépendante).
+
+```{r}
+"violet"
+```
+
+#Maintenant que nous avons relevé nos indicateurs de performance (précision et Kappa de Cohen) en fonction de notre “training dataset” nous allons le refaire mais cette fois-ci avec le “validation dataset”. Ceci nous permettant de nouveau de voir comment se comportent nos modèles sur des données sur lesquelles ils n'ont pas été construits.
+
+```{r}
+#Pour Gini
+
+predictions_sante_gini_pruned=predict(pruned_tree_sante_gini,newdata=base_de_donnee_final_sante_positive.validation,type="class")  
+
+actuals_sante=base_de_donnee_final_sante_positive.validation$sharing
+
+confusion.matrix.validation_sante_gini_pruned=table(actuals_sante,predictions_sante_gini_pruned)
+
+print(confusion.matrix.validation_sante_gini_pruned) 
+
+#Pour Entropy
+
+predictions_sante_entropy_pruned=predict(pruned_tree_sante_entropy,newdata=base_de_donnee_final_sante_positive.validation,type="class")  
+
+actuals_sante=base_de_donnee_final_sante_positive.validation$sharing
+
+confusion.matrix.validation_sante_entropy_pruned=table(actuals_sante,predictions_sante_entropy_pruned)
+
+print(confusion.matrix.validation_sante_entropy_pruned)
+
+
+#Afficher l'indicateur de précision, et le coefficient de Kappa de Cohen.
+
+#pour gini
+
+accuracy.validation_sante_gini_pruned=sum(diag(confusion.matrix.validation_sante_gini_pruned))/sum(confusion.matrix.validation_sante_gini_pruned)
+
+print(accuracy.validation_sante_gini_pruned) 
+
+CohenKappa(confusion.matrix.validation_sante_gini_pruned, conf.level = 0.95)
+
+#pour entropy
+
+accuracy.validation_sante_entropy_pruned=sum(diag(confusion.matrix.validation_sante_entropy_pruned))/sum(confusion.matrix.validation_sante_entropy_pruned)
+
+print(accuracy.validation_sante_entropy_pruned) 
+
+CohenKappa(confusion.matrix.validation_sante_entropy_pruned, conf.level = 0.95)
+
+#On voit que dans notre cas que c'est le modèle construit sur l’indice de Gini qui obtient la meilleure précision mais il n’utilise pas toutes les classes de notre variable dépendante.
+
+```
+
+```{r}
+"violet"
+```
+
+#Maintenant que nous avons relevé nos indicateurs de performance en fonction de notre “validation dataset” nous allons le refaire mais cette fois-ci avec le “test dataset”. 
+
+```{r}
+#Pour Gini
+
+predictions_sante_gini_pruned=predict(pruned_tree_sante_gini,newdata=base_de_donnee_final_sante_positive.test,type="class")  
+
+actuals_sante=base_de_donnee_final_sante_positive.test$sharing
+
+confusion.matrix.test_sante_gini_pruned=table(actuals_sante,predictions_sante_gini_pruned)
+
+print(confusion.matrix.test_sante_gini_pruned) 
+
+
+#Pour Entropy
+
+predictions_sante_entropy_pruned=predict(pruned_tree_sante_entropy,newdata=base_de_donnee_final_sante_positive.test,type="class")  
+
+actuals_sante=base_de_donnee_final_sante_positive.test$sharing
+
+confusion.matrix.test_sante_entropy_pruned=table(actuals_sante,predictions_sante_entropy_pruned)
+
+print(confusion.matrix.test_sante_entropy_pruned)
+
+
+#Afficher l'indicateur de précision, et le coefficient de kappa de Cohen
+
+#pour gini
+
+accuracy.test_sante_gini_pruned=sum(diag(confusion.matrix.test_sante_gini_pruned))/sum(confusion.matrix.test_sante_gini_pruned)
+
+print(accuracy.test_sante_gini_pruned) 
+
+CohenKappa(confusion.matrix.test_sante_gini_pruned, conf.level = 0.95)
+
+#pour entropy
+
+accuracy.test_sante_entropy_pruned=sum(diag(confusion.matrix.test_sante_entropy_pruned))/sum(confusion.matrix.test_sante_entropy_pruned)
+
+print(accuracy.test_sante_entropy_pruned) 
+
+CohenKappa(confusion.matrix.test_sante_entropy_pruned, conf.level = 0.95)
+```
+
+#Maintenant que nous avons obtenu notre arbre nous allons pouvoir tester son efficacité en faisant des courbes de ROC et calculer l’AUCs.
+##Nous avons fait beaucoup d’expérimentation sur comment tracer nos courbes ROCs, finalement nous avons décidé de ne prendre que la valeur de l’AUC calculé selon la méthode de Hand and Till (2001)
+#Ci-dessous vous pouvez retrouver comment on a calculé notre AUC multiclasse
+
+```{r}
+
+#Calcul de l'AUC multiclasse selon Hand and Till (2001)
+
+#Pour l’entropy
+
+#Pour le “Training dataset”
+
+predictions <- predict(pruned_tree_sante_entropy, base_de_donnee_final_sante_positive.training, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sante_positive.training$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_training_entropy<-auc(roc.multi.arbre)
+
+# pour le "Validation dataset"
+
+predictions <- predict(pruned_tree_sante_entropy, base_de_donnee_final_sante_positive.validation, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sante_positive.validation$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_validation_entropy<-auc(roc.multi.arbre)
+
+# Pour le "test dataset"
+
+predictions <- predict(pruned_tree_sante_entropy, base_de_donnee_final_sante_positive.test, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sante_positive.test$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_test_entropy<-auc(roc.multi.arbre)
+```
+
+```{r}
+#Pour Gini
+
+#pour le "Training dataset"
+
+predictions <- predict(pruned_tree_sante_gini, base_de_donnee_final_sante_positive.training, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sante_positive.training$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_training_gini<-auc(roc.multi.arbre)
+
+# pour le "Validation dataset"
+
+predictions <- predict(pruned_tree_sante_gini, base_de_donnee_final_sante_positive.validation, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sante_positive.validation$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_validation_gini<-auc(roc.multi.arbre)
+
+# pour le "Test dataset"
+
+predictions <- predict(pruned_tree_sante_gini, base_de_donnee_final_sante_positive.test, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sante_positive.test$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_test_gini<-auc(roc.multi.arbre)
+```
+
+**Maintenant que nous avons réalisés des arbres avec des paramètres subjectifs et objectifs (arbres pruned) nous allons dorénavant passer au Random forest**
+
+#Note: la librairie Random forest ne prend en compte que l’index de gini (Jacquet 2022)
+
+#“The random forest solves the problem of high variance in decision trees, but it has a price: it is no longer possible to ask a simple series of questions before obtaining the output class. In other words, it is not clear in a random forest which features are important in predicting the species a given plant belongs to.” (Jacquet 2023, 16)
+
+
+```{r}
+set.seed(seed)
+
+base_de_donnee_final_sante_positive.training$sharing <- as.factor(base_de_donnee_final_sante_positive.training$sharing) #nécessaire de le stipuler sinon le random forest essaye de faire une régression et non une classification
+
+str(base_de_donnee_final_sante_positive.training$sharing)
+class(base_de_donnee_final_sante_positive.training$sharing)
+
+random_forest_sante=randomForest(data=base_de_donnee_final_sante_positive.training,sharing~.,ntree=200,sampsize=60,replace=TRUE,mtry=2,method="class", weights=weights)
+
+print(random_forest_sante)
+```
+
+#On utilise la fonction “tuneRF” (présent dans la librairie “Randomforest”) pour représenter graphiquement notre erreur OBB en fonction du Mtry, afin de choisir la valeur de l'hyperparamètre qui la minimise. 
+
+```{r}
+
+X <- base_de_donnee_final_sante_positive.training[, -which(names(base_de_donnee_final_sante_positive.training) == "sharing")]
+Y <- base_de_donnee_final_sante_positive.training$sharing
+
+set.seed(seed)
+
+best_mtry <- tuneRF(
+  x          = X,
+  y          = Y,
+  mtryStart =,
+  ntreeTry   = 50,
+  stepFactor = 2,
+  improve    = 0.05,
+  trace      = TRUE,
+  plot = TRUE,
+  doBest=FALSE
+)
+
+# Afficher le résultat
+print(best_mtry)
+
+
+#On se rend compte que le meilleur hyperparamètre pour le mtry c'est 2
+
+
+```
+#On représente maintenant notre erreur OOB en fonction du nombre d’arbres utilisés dans notre forêt aléatoire, nous essayons de trouver le nombre d'arbres qui minimise l’erreur et qui pour autant donné un modèle stable.
+
+```{r}
+
+plot(random_forest_sante, main= "Paramètre ntree pour le Random Forest dans le domaine de la santé ")
+legend("top",cex=0.8,legend=colnames(random_forest_sante$err.rate),lty=c(1,2,3,4,5),col=c(1,2,3,4,5),horiz=T) #car nous avons 5 classes
+
+#Nous voyons que notre  OOB error est très stable, mais il semble qu'il y a moins de variations et, l'error est la plus basse, vers les 100 arbres 
+
+```
+
+```{r}
+"violet"
+```
+
+##On réalise maintenant notre forêt aléatoire en fonction des paramètres que nous avons obtenus ci-dessus.
+
+```{r}
+set.seed(seed)
+
+random_forest_tuned_sante=randomForest(data=base_de_donnee_final_sante_positive.training,sharing~.,ntree=100,sampsize=60,replace=TRUE,mtry=2, weights=weights) #ntree et mtry à changer en fonction du meilleur résultat observer dans les graphiques ci-dessus (dans notre cas 100 et 2)
+
+```
+
+#PS: On essaye de voir si nous obtenons une différence de résultat si nous appliquons l’importance de permutation tel que présenté par Parr et al. (2018)
+
+```{r}
+set.seed(seed)
+
+random_forest_tuned_sante_permutation=randomForest(data=base_de_donnee_final_sante_positive.training,sharing~.,ntree=100,sampsize=60,replace=TRUE,mtry=2, weights=weights, importance=T)
+```
+
+#Afficher l’indicateur de précision, et le coefficient de Kappa de Cohen pour la Forêt Aléatoire (qui n’est pas permutée) sur le jeu de données d'entraînement.
+
+```{r}
+predictions_random=predict(random_forest_tuned_sante,newdata=base_de_donnee_final_sante_positive.training,type="class")
+
+actuals=base_de_donnee_final_sante_positive.training$sharing
+
+confusion.matrix.training_random=table(actuals,predictions_random)
+
+print(confusion.matrix.training_random)
+
+
+accuracy.training_random=sum(diag(confusion.matrix.training_random))/sum(confusion.matrix.training_random)
+
+print(accuracy.training_random)
+
+CohenKappa(confusion.matrix.training_random, conf.level = 0.95)
+```
+
+#Maintenant testons son efficacité avec le jeu de données de validation (pour la forêt aléatoire qui n’est pas permutée)
+
+```{r}
+predictions_random=predict(random_forest_tuned_sante,newdata=base_de_donnee_final_sante_positive.validation,type="class")
+
+actuals=base_de_donnee_final_sante_positive.validation$sharing
+
+confusion.matrix.validation_random=table(actuals,predictions_random)
+
+print(confusion.matrix.validation_random)
+
+accuracy.validation_random=sum(diag(confusion.matrix.validation_random))/sum(confusion.matrix.validation_random)
+
+print(accuracy.validation_random) 
+
+CohenKappa(confusion.matrix.validation_random, conf.level = 0.95)
+```
+
+#Représentons notre Forêts Aléatoires à savoir l’importance de nos variables indépendantes pour faire décroitre l’impureté de notre variable dépendante.
+
+```{r}
+importance(random_forest_tuned_sante)
+```
+
+#On rend nos résultats plus présentables en les ordonnant et en faisant une représentation graphique
+
+```{r}
+varImpPlot(random_forest_tuned_sante, main= 'Forêts Aléatoires pour le domaine de la santé')
+```
+
+#Nous voyons que surprenant nous obtenons des résultats diffèrent de ceux obtenus dans notre arbre pruned. Où la variable de l’importance du problème se trouve très bas à contrario de l'âge.
+
+#On affiche nos résultat pour la permutation d’importance
+
+
+```{r}
+importance(random_forest_tuned_sante_permutation, type=1)
+```
+
+```{r}
+varImpPlot(random_forest_tuned_sante_permutation, type=1, main= 'Forêt Aléatoire pour le domaine de la santé')
+```
+
+#Nous voyons que nous retombons sur des résultats similaires à ceux de notre arbre pruned. Ce qui est beaucoup plus rassurant.
+
+##Maintenant testons l’efficacité avec le jeu de données de test (pour la forêt aléatoire qui n’est pas permutée)
+
+
+```{r}
+predictions_random_test=predict(random_forest_tuned_sante,newdata=base_de_donnee_final_sante_positive.test,type="class")
+
+actuals_test=base_de_donnee_final_sante_positive.test$sharing
+
+confusion.matrix.test_random=table(actuals_test,predictions_random_test)
+
+print(confusion.matrix.test_random)
+
+#vérification de de la précision et du coefficient de kappa de Cohen
+
+accuracy.test_random=sum(diag(confusion.matrix.test_random))/sum(confusion.matrix.test_random)
+
+print(accuracy.test_random) 
+
+CohenKappa(confusion.matrix.test_random, conf.level = 0.95)
+
+```
+
+Nous voyons grâce à la forêt aléatoire que des variables semblent prédominantes pour augmenter l’homogénéité de nos classes, et parmi elles ont retrouvent d’autres variables que celles misent en lumières par la régression linéaire de l’article de Trein et Varone (2023), notamment la variable sur le positionnement politique gauche/droite, mais étrange car les résultats sont éloignés de ceux obtenus dans notre arbre pruned.
+
+PS: A travers la Permutation nous voyons que nous obtenons de suite des résultats bien plus en accord avec notre arbre pruned, ceci nous semble donc être une piste à creuser pour de futures analyses. Indiquant que nous serions face à une limite de la forêt aléatoire.
+
+##Maintenant que nous avons obtenu nos forêts nous allons pouvoir tester leurs efficacités en faisant des courbes de ROC et calculer leurs AUCs.
+
+#Premièrement nous allons calculer l’AUC comme avant.
+
+
+```{r}
+
+#pour le "Training dataset"
+
+predictions <- predict(random_forest_tuned_sante, base_de_donnee_final_sante_positive.training, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sante_positive.training$sharing, predictions)
+auc(roc.multi.arbre)
+Random_training<-auc(roc.multi.arbre)
+
+# pour le "Validation dataset"
+
+predictions <- predict(random_forest_tuned_sante, base_de_donnee_final_sante_positive.validation, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sante_positive.validation$sharing, predictions)
+auc(roc.multi.arbre)
+Random_validation<-auc(roc.multi.arbre)
+
+# pour le "Test dataset"
+
+predictions <- predict(random_forest_tuned_sante, base_de_donnee_final_sante_positive.test, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sante_positive.test$sharing, predictions)
+auc(roc.multi.arbre)
+Random_test<-auc(roc.multi.arbre)
+```
+
+#Maintenant on essaye de représenter nos courbes ROC, Mais nous obtenons un résultat différent en termes d’AUC par rapport à la méthode ci-dessus, pour cette raison nous avons décidé de l’écarter, mais nous avons décidé de laisser le code.
+
+```{r eval=FALSE}
+
+#Nous utilisons la librairie proc (Robin et al. 2023b) et la réponse fournie à un utilisateur (Cheng 2017) et Chatgpt
+
+predictions <- as.numeric(predict(random_forest_tuned_sante, newdata=base_de_donnee_final_sante_positive.test, type = 'response')) #peut etre pas le bon choix dans le type
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sante_positive.test$sharing, predictions)
+auc(roc.multi.arbre)
+
+rs <- roc.multi.arbre[['rocs']]
+
+plot.roc(rs[[1]], main = "Courbes ROC pour toutes les classes", col = 1, lwd = 2)
+labels <- c("Classe 1")  # Initialiser 'labels' avec le premier nom de classe
+
+# Ajouter des lignes pour les autres courbes ROC et remplir 'labels'
+sapply(2:length(rs), function(i) {
+  lines.roc(rs[[i]], col = i, lwd = 2)
+  labels <<- c(labels, paste("Classe", i))  # Remplir 'labels' avec des noms de classe
+})
+
+# Ajouter la légende
+legend("bottomright", legend = labels, col = 1:length(rs), lwd = 2, title = "Légende", cex = 0.8)
+
+```
+
+###Nous avons fini notre analyse pour l’arbre de classification, maintenant nous allons passer à une méthode statistique plus classique pour pouvoir comparer nos Modèles.
+
+**Régression logistique ordinale pour le domaine de la santé**
+
+<https://stats.oarc.ucla.edu/r/dae/ordinal-logistic-regression/>
+
+Nous utilisons la méthode présentée par l'UCLA, Statistical Methods and Data Analytics group (s.d.)
+
+```{r}
+
+#Les libraries nécessaire à sa réalisation 
+
+library(foreign)
+library(ggplot2)
+library(MASS)
+library(Hmisc)
+library(reshape2)
+library(tidyverse)
+library(car)
+
+```
+
+#Cette fonction calcule notre régression logistique ordinale, nous avons décidé d'appliquer notre pondération dessus pour rendre les résultats comparables entre nos modèles. 
+
+```{r}
+sante <- polr(sharing~ Sprache+ S1+ std2_trust_fg+ std2_importance+ std2_apps_all+ std2_leftright+ std2_education+ std2_risk+ std2_age, data = base_de_donnee_final_sante_positive.training, Hess=TRUE, weights=weights) 
+
+```
+#On fait quelques analyses en amont pour voir comment elle est structurée et quels sont ses résultats.
+
+```{r}
+summary(sante)
+vif(sante)
+
+summary(sante$model)
+sante$converged
+
+(ctable_sante <- coef(summary(sante)))
+```
+
+#Au-dessus nous avons obtenu les résultats mais essayons d’obtenir une p-valeur, qui est importante pour déterminer lesquelles de nos variables sont significatives.
+
+```{r}
+p <- pnorm(abs(ctable_sante[, "t value"]), lower.tail = FALSE) * 2
+
+(ctable_sante <- cbind(ctable_sante, "p value" = p))
+
+(ci <- confint(sante, level=0.95))
+
+confint.default(sante, level=0.95)
+
+```
+
+#Nous sauvegardons notre tableau ci-dessus au format excel
+
+```{r}
+
+tab<-(ctable_sante <- cbind(ctable_sante, "p value" = p))
+library(writexl)
+
+tab_df <- as.data.frame(tab)
+
+
+writexl::write_xlsx(tab_df, path = "C:/Users/edgar/Desktop/R memoire/tableau_p.xlsx")
+
+#Interpréter les valeurs de la régression logistique ordinales sont assez complexes, donc nous préférons utiliser les odds ratios. Pour l'interprétation nous nous basons sur celle proposée par l’UCLA: Statistical Consulting Group (s. d.)
+
+#"[...] convert the coefficients into odds ratios" (UCLA: Statistical Consulting Group, s. d.)
+
+
+```
+
+```{r}
+#"[...] convert the coefficients into odds ratios" (UCLA, Statistical Methods and Data Analytics group, s.d.)
+
+exp(coef(sante))
+exp(cbind(OR = coef(sante), ci)) 
+
+#"These coefficients are called proportional odds ratios and we would interpret these pretty much as we would odds ratios from a binary logistic regression" (UCLA: Statistical Consulting Group, s. d.).
+
+```
+#Nous sauvegardons notre tableau ci-dessus au format excel
+
+```{r}
+
+tab_OR<-exp(cbind(OR = coef(sante), ci)) 
+
+tab_df_OR <- as.data.frame(tab_OR)
+
+writexl::write_xlsx(tab_df_OR, path = "C:/Users/edgar/Desktop/R memoire/tableau_OR.xlsx")
+
+```
+
+##Maintenant que nous avons obtenu nos odds ratio nous pouvons utiliser le “Nagelkerke R-squared” pour obtenir un ” The goodness of fit”.
+
+#Nous ne mobilisons pas cette métrique dans notre analyse. 
+
+
+```{r eval=FALSE}
+
+#https://cran.r-project.org/web/packages/DescTools/DescTools.pdf#page=454.71 (Signorell 2014, 456)
+
+
+PseudoR2(sante, which = "Nagelkerke")
+
+```
+
+#On va tester la “proportional odds assumption”. Cette hypothèse est importante car est un des fondements du fonctionnement de cette régression, en effet si les seuils entre nos classes dans nos variables ne sont pas similaires entre eux, nous violons cette supposition.  Pour voir si c’est le cas, nous pouvons nous référer au graphique à la fin.
+
+```{r}
+sf <- function(y) { c('Y>=1' = qlogis(mean(y >= 1)), 'Y>=2' = qlogis(mean(y >= 2)),  'Y>=3' = qlogis(mean(y >= 3)), 'Y>=4' =qlogis(mean(y >= 4)), 'Y>=5' =qlogis(mean(y >= 5)))} #ou Y représente notre variable dépendante
+
+
+(s <- with(base_de_donnee_final_sante_positive.training, summary(as.numeric(sharing) ~ Sprache + S1 +  std2_trust_fg +  std2_importance +  std2_apps_all +  std2_leftright +  std2_education +  std2_risk +  std2_age , fun=sf)))
+
+
+#
+
+glm(I(as.numeric(sharing) >= 2) ~ Sprache, family="binomial", data = base_de_donnee_final_sante_positive.training)
+glm(I(as.numeric(sharing) >= 3) ~ Sprache, family="binomial", data = base_de_donnee_final_sante_positive.training)
+    
+glm(I(as.numeric(sharing) >= 2) ~ S1, family="binomial", data = base_de_donnee_final_sante_positive.training)
+glm(I(as.numeric(sharing) >= 3) ~ S1, family="binomial", data = base_de_donnee_final_sante_positive.training)
+
+```
+
+```{r}
+s[, 4] <- s[, 4] - s[, 3]
+s[, 3] <- s[, 3] - s[, 3]
+
+print(s[,3:4]) 
+```
+
+#On rassemble toutes nos données en un graphique bien plus rapidement et facilement interprétable. 
+
+```{r}
+plot(s, which=1:5, xlab='logit', main='parallel slopes assumption sante', xlim=range(s[,3:4]), cex.axis=0.2,cex.lab=0.4,cex.main=0.2) #which=1:5 car nous avons 5 catégories dans notre variable dépendante
+
+pdf("parallel slopes assumption sante")
+plot(s, which=1:5, xlab='logit', main='parallel slopes assumption sante', xlim=range(s[,3:4]), cex.axis=0.2,cex.lab=0.4,cex.main=0.2)
+dev.off()
+
+#Au vu du graphique bien qu'il semble avoir une forte variance dans la variable st2d_importance et st2d_trust_fg, il nous semble que la "parallel slopes assumption" est raisonnable. Au vu de ces résultats, ce graphique nous semble être une très bonne piste pour expliquer les résultats surprenant que nous avons obtenus dans notre forêt aléatoire. En effet, les variables les plus “variantes” semblent être celles qui ont été minorées dans leurs importances pour la forêt aléatoire.
+```
+
+##Nous faisons nos matrices de confusion, les indicateurs de précision, les coefficients Kappa de Cohen et le calcul de l’AUCs pour notre régression logistique. Ceci nous permettra de comparer en termes de performance ce modèle avec nos arbres de classification.  Nous allons donc calculer nos métriques de performances sur les trois jeux de données. 
+
+##Etant donné que la régression logistique ordinale est un modèle paramétrique nous ne devrions pas trouver de grands écarts entre les jeux de données. 
+
+
+```{r}
+#Pour calculer notre matrice et la précision nous avons adaptés le code présenté par Analytics (2019)
+
+#pour le jeu de données de “Training”
+
+predict_reg_training = predict(sante,base_de_donnee_final_sante_positive.training)
+table(base_de_donnee_final_sante_positive.training$sharing, predict_reg_training)
+accuracy_reg_training <- mean(as.character(base_de_donnee_final_sante_positive.training$sharing) == as.character(predict_reg_training))
+print(accuracy_reg_training)
+
+#pour le jeu de données de “Validation”
+
+predict_reg_validation = predict(sante,base_de_donnee_final_sante_positive.validation)
+table(base_de_donnee_final_sante_positive.validation$sharing, predict_reg_validation)
+accuracy_reg_validation <- mean(as.character(base_de_donnee_final_sante_positive.validation$sharing) == as.character(predict_reg_validation))
+print(accuracy_reg_validation)
+
+
+#pour le jeu de données de “Test”
+
+predict_reg_test = predict(sante,base_de_donnee_final_sante_positive.test)
+table(base_de_donnee_final_sante_positive.test$sharing, predict_reg_test)
+accuracy_reg_test <- mean(as.character(base_de_donnee_final_sante_positive.test$sharing) == as.character(predict_reg_test))
+print(accuracy_reg_test)
+
+```
+
+```{r}
+#Maintenant calculons le coefficient de Kappa de Cohen pour notre régression logistique ordinale
+
+#”Training dataset”
+
+predict_reg_training = predict(sante,base_de_donnee_final_sante_positive.training)
+confusion.matrix.training_sante_reg=table(base_de_donnee_final_sante_positive.training$sharing, predict_reg_training)
+CohenKappa(confusion.matrix.training_sante_reg, conf.level = 0.95)
+
+#”Validation dataset”
+
+predict_reg_validation = predict(sante,base_de_donnee_final_sante_positive.validation)
+confusion.matrix.validation_sante_reg=table(base_de_donnee_final_sante_positive.validation$sharing, predict_reg_validation)
+CohenKappa(confusion.matrix.validation_sante_reg, conf.level = 0.95)
+
+#”Test dataset”
+
+predict_reg_test = predict(sante,base_de_donnee_final_sante_positive.test)
+confusion.matrix.test_sante_reg=table(base_de_donnee_final_sante_positive.test$sharing, predict_reg_test)
+CohenKappa(confusion.matrix.test_sante_reg, conf.level = 0.95)
+```
+############################################
+
+#Nous avons fini toutes nos analyses, maintenant nous allons juste regrouper tous nos indicateurs de précisions pour pouvoir facilement comparer nos modèles entre eux. Pour ce faire nous allons réaliser des tableaux comparatifs.
+
+#Pour l’arbre de base (Gini)
+
+
+```{r}
+print(confusion.matrix.training_sante_gini)
+print(accuracy.training_sante_gini)
+
+print(confusion.matrix.validation_sante_gini)
+print(accuracy.validation_sante_gini)
+```
+
+#Pour l'arbre pruned (Entropy)
+
+```{r}
+print(confusion.matrix.training_sante_entropy_pruned)
+print(accuracy.training_sante_entropy_pruned)
+
+print(confusion.matrix.validation_sante_entropy_pruned)
+print(accuracy.validation_sante_entropy_pruned)
+
+print(confusion.matrix.test_sante_entropy_pruned)
+print(accuracy.test_sante_entropy_pruned)
+```
+
+#Pour le random forest (Gini)
+
+```{r}
+print(confusion.matrix.training_random)
+print(accuracy.training_random) 
+
+print(confusion.matrix.validation_random)
+print(accuracy.validation_random) 
+```
+
+**#Premier tableau de comparaison de nos modèles par leurs précisions, pour le domaine de la santé. **
+
+```{r}
+library(kableExtra)
+
+df_1 <- data.frame(
+  Modèle = c("Régression logistique ordinale", "Arbre pruned", "Forêt aléatoire"), 
+  Training = c(accuracy_reg_training, accuracy.training_sante_entropy_pruned, accuracy.training_random), 
+  Validation = c(accuracy_reg_validation, accuracy.validation_sante_entropy_pruned, accuracy.validation_random), 
+  Test = c(accuracy_reg_test, accuracy.test_sante_entropy_pruned, accuracy.test_random)
+)
+df_1
+
+
+
+tableau <- kable(df_1, format = "html", table.attr = "style='width:70%;'") %>%
+  kable_styling(bootstrap_options = c("responsive"))
+
+print(tableau)
+
+#"The fact that training and testing accuracy are almost equal tells us that there is no overfitting kind of scenario." (Ramasubramanian et Singh 2019, 357)
+```
+
+#Maintenant nous allons calculer l’AUC multiclasse selon la méthode de Hand and Till (2001) pour notre régression logistique ordinale. 
+
+```{r}
+
+#Pour le jeu de données “training” 
+
+training_prob = predict(sante, newdata= base_de_donnee_final_sante_positive.training, type = "prob")
+
+roc.multi_regression <- multiclass.roc(base_de_donnee_final_sante_positive.training$sharing, training_prob)
+auc(roc.multi_regression)
+Reg_training<-auc(roc.multi_regression)
+
+#Pour le jeu de données “Validation” 
+
+validation_prob = predict(sante, newdata= base_de_donnee_final_sante_positive.validation, type = "prob")
+
+roc.multi_regression <- multiclass.roc(base_de_donnee_final_sante_positive.validation$sharing, validation_prob)
+auc(roc.multi_regression)
+Reg_validation<-auc(roc.multi_regression)
+
+#Pour le jeu de données “Test” 
+
+test_prob = predict(sante, newdata= base_de_donnee_final_sante_positive.test, type = "prob")
+
+roc.multi_regression <- multiclass.roc(base_de_donnee_final_sante_positive.test$sharing, test_prob)
+auc(roc.multi_regression)
+Reg_test<-auc(roc.multi_regression)
+
+```
+
+**#Deuxième tableau de comparaison de nos modèles par leurs AUC**
+
+```{r}
+df_2 <- data.frame(
+  Modèle = c("Régression logistique ordinale", "Arbre pruned", "Forêt aléatoire"), 
+  Training = c(Reg_training, Pruned_training_entropy, Random_training), 
+  Validation = c(Reg_validation,  Pruned_validation_entropy, Random_validation), 
+  Test = c(Reg_test, Pruned_test_entropy, Random_test)
+)
+df_2
+
+
+
+tableau <- kable(df_2, format = "html", table.attr = "style='width:70%;'") %>%
+  kable_styling(bootstrap_options = c("responsive"))
+
+print(tableau)
+
+```
+
+**#Nous rassemblons tous nos coefficients de Kappa de Cohen pour tous nos modèles.  Ceci nous permettra de faire notre tableau de comparaison**
+
+#Le tableau sera fait à la main car le coefficient comprend les intervalles.
+
+#Arbre Pruned
+
+
+```{r}
+CohenKappa(confusion.matrix.training_sante_entropy_pruned, conf.level = 0.95)
+CohenKappa(confusion.matrix.validation_sante_entropy_pruned, conf.level = 0.95)
+CohenKappa(confusion.matrix.test_sante_entropy_pruned, conf.level = 0.95)
+
+```
+
+#Random Forest
+
+```{r}
+CohenKappa(confusion.matrix.training_random, conf.level = 0.95)
+CohenKappa(confusion.matrix.validation_random, conf.level = 0.95)
+CohenKappa(confusion.matrix.test_random, conf.level = 0.95)
+```
+
+#régression
+
+```{r}
+CohenKappa(confusion.matrix.training_sante_reg, conf.level = 0.95)
+CohenKappa(confusion.matrix.validation_sante_reg, conf.level = 0.95)
+CohenKappa(confusion.matrix.test_sante_reg, conf.level = 0.95)
+
+```
+
+#ici vous pouvez retrouver un test, comme pour la foret aléatoire, pour tracer nos courbes ROCs a partir de notre AUC dans le cadre de notre régression. Mais nous l'avons abandonné car obtenant des résultats différents.
+
+```{r eval=FALSE}
+
+rs <- roc.multi[['rocs']]
+plot.roc(rs[[1]], main = "Courbes ROC pour toutes les classes", col = 1, lwd = 2)
+labels <- c("Classe 1")  # Initialiser 'labels' avec le premier nom de classe
+
+# Ajouter des lignes pour les autres courbes ROC et remplir 'labels'
+sapply(2:length(rs), function(i) {
+  lines.roc(rs[[i]], col = i, lwd = 2)
+  labels <<- c(labels, paste("Classe", i))  # Remplir 'labels' avec des noms de classe
+})
+
+# Ajouter la légende
+legend("bottomright", legend = labels, col = 1:length(rs), lwd = 2, title = "Légende", cex = 0.8)
+```
