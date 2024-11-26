@@ -12,6 +12,8 @@ __security.Rmd__: Pour le domaine sécuritaire
 __social.Rmd__: Pour le domaine de l'aide sociale  
 __tous_secteurs.Rmd__: Lorsque que tous les domaine précédemment sont fusionnés ensemble  
 
+Le document pour le domaine de la santé est substnatiellement plus long que pour les autres domaines car les commentaires sont plus nombreux et précis.
+
 ## Résumé du mémoire:
 
 Ce mémoire présente un cas d’application du modèle d’apprentissage automatique des arbres de décisions dans les champs des sciences sociales. Il présente de manière technique et précise le fonctionnement de cette méthode et les résultats obtenus.
