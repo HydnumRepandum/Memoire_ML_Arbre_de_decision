@@ -1,0 +1,1068 @@
+---
+title: "Code R pour l'ensemble des domaines politiques"
+author: "Edgar Mathevet"
+date: "2024-07-18"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r pressure, clean = TRUE }
+#Ensemble de librairies nécessaires
+
+library(rattle)
+library(writexl)
+library(fastDummies) 
+library(QCA)
+library(readxl)
+library(mice)
+library(DescTools)
+
+#Mise en place des libraires nécessaire aux analyses par arbre de décisions
+
+library(tidyverse)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+
+#Librairie nécessaire pour calculer l’AUCs
+
+
+library(pROC)
+library(ROCR)
+library(pracma)
+library(stats)
+library(ROCaggregator)
+
+```
+
+
+
+```{r base de donnees}
+#Téléchargement de la base de données
+memoire <- read.csv("C:/Users/edgar/Desktop/R memoire/data_trein_varone.csv")
+```
+
+Création de la base de données réduite pour notre projet incluant que les variables que l’on souhaite tester
+
+```{r modif base de donne}
+
+base_de_donnee <- c("Sprache", "S1", "sharing", "sector", "std2_trust_fg", "std2_importance", "std2_apps_all", "std2_leftright", "std2_education", "std2_risk", "std2_age")
+
+```
+
+```{r manipulation de la base de donnees}
+
+base_de_donnee_final<- memoire %>% select(all_of(base_de_donnee))
+
+lapply(base_de_donnee_final[, c("Sprache", "S1", "sharing", "sector", "std2_trust_fg", "std2_importance", "std2_apps_all", "std2_leftright", "std2_education", "std2_risk", "std2_age", "sector")], table)
+
+```
+
+on va transformer certaines variables "charactere" comme étant des facteurs
+
+```{r}
+hist(base_de_donnee_final$std2_importance)
+barplot(table(base_de_donnee_final$std2_importance))
+str(base_de_donnee_final$std2_importance)
+summary(base_de_donnee_final$std2_trust_fg) 
+
+base_de_donnee_final$S1 <- factor(base_de_donnee_final$S1, levels = c("Female", "Male"))
+base_de_donnee_final$S1 <- as.numeric(base_de_donnee_final$S1)
+base_de_donnee_final$S1 <- factor(base_de_donnee_final$S1)
+levels(base_de_donnee_final$S1)
+
+base_de_donnee_final$Sprache <-factor(base_de_donnee_final$Sprache, levels = c("Deutsch", "Français"))
+base_de_donnee_final$Sprache <- as.numeric(base_de_donnee_final$Sprache)
+base_de_donnee_final$Sprache <- factor(base_de_donnee_final$Sprache)
+levels(base_de_donnee_final$Sprache)
+
+base_de_donnee_final$sharing <- factor(base_de_donnee_final$sharing, ordered = TRUE, levels = c( "0", "0.25",  "0.5", "0.75", "1" ))
+levels(base_de_donnee_final$sharing)
+
+str(base_de_donnee_final$sector)#il s'agit d'une variable integer
+base_de_donnee_final$sector <- factor(base_de_donnee_final$sector, levels = c("1", "2", "3", "4" ))
+levels(base_de_donnee_final$sector)
+summary(base_de_donnee_final$sector)
+```
+
+######On va commencer par analyser pour tous les domaines politiques
+
+#Création de notre base de données réduite en fonction de notre variable dépendante (Donc les personnes qui partagent leurs données dans tous les domaines politiques
+
+
+```{r}
+base_de_donnee_sector <- c("Sprache", "S1", "sharing", "std2_trust_fg", "std2_importance", "std2_apps_all", "std2_leftright", "std2_education", "std2_risk", "std2_age", "sector")
+base_de_donnee_final_sector_positive<- base_de_donnee_final %>% select(all_of(base_de_donnee_sector))
+
+#On va supprimmer les NA de l'échantillon dans le cas ou il en existerait 
+
+base_de_donnee_final_sector_positive <- na.omit(base_de_donnee_final_sector_positive)
+```
+
+#Commence l'analyse par des observations
+
+```{r}
+
+head(base_de_donnee_final_sector_positive, 3)
+
+summary(base_de_donnee_final_sector_positive)
+
+table(base_de_donnee_final_sector_positive$sharing)
+
+
+```
+
+###Maintenant nous établissons des diagrammes de dispersions en fonction de chacune des variables 
+
+```{r}
+
+my_cols=c("red","green","blue","yellow","violet")
+
+pairs(base_de_donnee_final_sector_positive[,1:11],pch=19,cex=0.5,col=my_cols[base_de_donnee_final_sector_positive$sharing])
+
+pdf("Pairwise scatterplot sector")
+pairs(base_de_donnee_final_sector_positive[,1:11],pch=19,cex=0.5,col=my_cols[base_de_donnee_final_sector_positive$sharing])
+dev.off()
+
+```
+
+#Début de l'analyse par arbre de décision pour tous les domaines politiques
+
+#Création de nos jeux de données
+
+```{r}
+seed=220
+
+set.seed(seed)
+
+ind=sample(3,nrow(base_de_donnee_final_sector_positive),replace=TRUE,prob=c(0.60,0.20, 0.20))
+
+
+base_de_donnee_final_sector_positive.training=base_de_donnee_final_sector_positive[ind==1,]
+
+base_de_donnee_final_sector_positive.validation=base_de_donnee_final_sector_positive[ind==2,]
+
+base_de_donnee_final_sector_positive.test=base_de_donnee_final_sector_positive[ind==3,]
+
+```
+
+#Nous allons utiliser cette méthode qui permet de donner un poids égal entre les classes de notre variable pour éviter que les modèles surajustent.
+
+```{r}
+
+class_proportions <- table(base_de_donnee_final_sector_positive.training$sharing) / nrow(base_de_donnee_final_sector_positive.training)
+print(class_proportions)
+
+weights <- numeric(nrow(base_de_donnee_final_sector_positive.training))
+
+for (level in levels(base_de_donnee_final_sector_positive.training$sharing)) {
+  weights[base_de_donnee_final_sector_positive.training$sharing == level] <- 1 / class_proportions[level]
+}
+
+# Normalisation des poids pour que la somme soit égale au nombre total d'observations
+
+weights <- weights * length(weights) / sum(weights)
+
+
+head(weights)
+
+```
+
+#Nos arbres de classification en utilisant des paramètres subjectifs
+
+```{r}
+set.seed(seed)
+
+#Pour Gini
+
+decision_tree_sector_gini=rpart(data=base_de_donnee_final_sector_positive.training,sharing~.,method="class", control=rpart.control(minsplit=50,minbucket=20),parms=list(split="gini"), weights=weights)
+
+#Pour l'Entropy
+
+decision_tree_sector_entropy=rpart(data=base_de_donnee_final_sector_positive.training,sharing~.,method="class",control=rpart.control(minsplit=50,minbucket=20),parms=list(split="information"),weights=weights)
+
+```
+
+#Représentation graphique de nos arbres.
+
+```{r}
+pdf("Test arbre a decision gini sector")
+rpart.plot(decision_tree_sector_gini,main="Arbre de Classification pour tous les secteurs (Gini)",extra=101)
+dev.off()
+
+rpart.plot(decision_tree_sector_gini,main="Arbre de Classification pour tous les secteurs (Gini)",extra=101)
+```
+
+```{r}
+"red"
+
+pdf("Arbre de décision (entropy) sector")
+rpart.plot(decision_tree_sector_entropy,main="Arbre de Classification pour tous les domaines (entropy)",extra=101)
+dev.off()
+
+rpart.plot(decision_tree_sector_entropy,main="Arbre de Classification pour tous les domaines  (entropy)",extra=101)
+```
+
+#Testons la performance de nos arbres de classifications classiques
+
+```{r}
+#Pour Gini
+
+predictions_sector_gini=predict(decision_tree_sector_gini,newdata=base_de_donnee_final_sector_positive.training,type="class")
+
+actuals_sector=base_de_donnee_final_sector_positive.training$sharing
+
+confusion.matrix.training_sector_gini=table(actuals_sector,predictions_sector_gini)
+
+print(confusion.matrix.training_sector_gini)
+
+#Pour Entropy
+
+predictions_sector_entropy=predict(decision_tree_sector_entropy,newdata=base_de_donnee_final_sector_positive.training,type="class")
+
+actuals_sector=base_de_donnee_final_sector_positive.training$sharing
+
+confusion.matrix.training_sector_entropy=table(actuals_sector,predictions_sector_entropy)
+
+print(confusion.matrix.training_sector_entropy)
+
+
+#Afficher l'indicateur de précision, et le coefficient Kappa de Cohen
+#(Signorell 2024b, 108-111)
+
+#https://cran.r-project.org/web/packages/DescTools/DescTools.pdf#pag e=106.24
+#Pour gini
+
+accuracy.training_sector_gini=sum(diag(confusion.matrix.training_sector_gini))/sum(confusion.matrix.training_sector_gini)
+
+print(accuracy.training_sector_gini) 
+#
+CohenKappa(confusion.matrix.training_sector_gini, conf.level = 0.95)
+
+#Pour entropy
+
+accuracy.training_sector_entropy=sum(diag(confusion.matrix.training_sector_entropy))/sum(confusion.matrix.training_sector_entropy)
+
+print(accuracy.training_sector_entropy)
+#
+CohenKappa(confusion.matrix.training_sector_entropy, conf.level = 0.95)
+```
+
+#Maintenant que nous avons relevé nos indicateurs de performances en fonction de notre “training dataset” nous allons le refaire mais cette fois-ci avec le “validation dataset”.
+
+```{r}
+#Pour Gini
+
+predictions_sector_gini=predict(decision_tree_sector_gini,newdata=base_de_donnee_final_sector_positive.validation,type="class")  
+
+actuals_sector=base_de_donnee_final_sector_positive.validation$sharing
+
+confusion.matrix.validation_sector_gini=table(actuals_sector,predictions_sector_gini)
+
+print(confusion.matrix.validation_sector_gini) 
+
+#Pour Entropy
+
+predictions_sector_entropy=predict(decision_tree_sector_entropy,newdata=base_de_donnee_final_sector_positive.validation,type="class") 
+
+actuals_sector=base_de_donnee_final_sector_positive.validation$sharing
+
+confusion.matrix.validation_sector_entropy=table(actuals_sector,predictions_sector_entropy)
+
+print(confusion.matrix.validation_sector_entropy)
+
+
+#Afficher l'indicateur de précision, et le coefficient de Kappa de Cohen
+
+#pour gini
+
+accuracy.validation_sector_gini=sum(diag(confusion.matrix.validation_sector_gini))/sum(confusion.matrix.validation_sector_gini)
+
+print(accuracy.validation_sector_gini) 
+
+CohenKappa(confusion.matrix.validation_sector_gini, conf.level = 0.95)
+
+#pour entropy
+
+accuracy.validation_sector_entropy=sum(diag(confusion.matrix.validation_sector_entropy))/sum(confusion.matrix.validation_sector_entropy)
+
+print(accuracy.validation_sector_entropy) 
+
+CohenKappa(confusion.matrix.validation_sector_entropy, conf.level = 0.95)
+
+
+```
+
+##Maintenant on fait notre arbre pruned
+
+```{r}
+options(max.print=999999)
+set.seed(seed)
+
+#"Comment: In cases where a small change in cp implies a large change in nplits, you may use the “1SE rule”. This rule says that you should look for the minimum of xerror but then go up 1SE (given by “xstd”) because that tree will be less complex." (Jacquet 2022)
+
+#Pour Entropy
+
+decision_tree_sector_large_entropy=rpart(data=base_de_donnee_final_sector_positive.training,sharing~.,method="class",control=rpart.control(minsplit=1,minbucket=1,cp=0),parms=list(split="information"), weights=weights)
+
+rpart.plot(decision_tree_sector_large_entropy,main="Arbre le plus grand pour tous les domaines, entropy",extra=101)
+
+pdf("Arbre le plus grand pour pour tous les secteurs")
+rpart.plot(decision_tree_sector_large_entropy,main="Arbre le plus grand pour pour tous les domaines, entropy",extra=101)
+dev.off()
+
+printcp(decision_tree_sector_large_entropy) 
+
+
+plot(decision_tree_sector_large_entropy$cptable[,"CP"],decision_tree_sector_large_entropy$cptable[,"xerror"],type="S",xlab="CP",ylab="xerror", main="Arbre le plus grand pour pour tous les domaines, entropy (xerror)") 
+
+plot(decision_tree_sector_large_entropy$cptable[,"CP"],decision_tree_sector_large_entropy$cptable[,"nsplit"],type="S",xlab="CP",ylab="nsplit", main="Arbre le plus grand pour pour tous les domaines, entropy (nsplit)")
+
+#Pour Gini 
+
+decision_tree_sector_large_gini=rpart(data=base_de_donnee_final_sector_positive.training,sharing~.,method="class",control=rpart.control(minsplit=1,minbucket=1,cp=0),parms=list(split="gini"),weights=weights)
+
+rpart.plot(decision_tree_sector_large_gini,main="Arbre le plus grand pour tous les domaines, Gini",extra=101)
+
+pdf("Arbre le plus grand pour tous les secteurs, Gini")
+rpart.plot(decision_tree_sector_large_gini,main="Arbre le plus grand pour tous les domaines, Gini",extra=101)
+dev.off()
+
+printcp(decision_tree_sector_large_gini) # plus CP est petit plus l'arbre est complexe, nsplit répresente le fractionnement dans l'arbre
+
+plot(decision_tree_sector_large_gini$cptable[,"CP"],decision_tree_sector_large_gini$cptable[,"xerror"],type="S",xlab="CP",ylab="xerror",main="Arbre le plus grand pour pour tous les domaines, gini (xerror)")
+
+plot(decision_tree_sector_large_gini$cptable[,"CP"],decision_tree_sector_large_gini$cptable[,"nsplit"],type="S",xlab="CP",ylab="nsplit", main="Arbre le plus grand pour pour tous les domaines, gini (nsplit)")
+```
+
+```{r}
+
+#Pour Entropy
+
+cp_best_sector_entropy=decision_tree_sector_large_entropy$cptable[which.min(decision_tree_sector_large_entropy$cptable[,"xerror"]),"CP"]
+
+print(cp_best_sector_entropy)
+
+pruned_tree_sector_entropy=prune(decision_tree_sector_large_entropy,cp=cp_best_sector_entropy)
+
+rpart.plot(pruned_tree_sector_entropy,main="Arbre Pruned pour tous les domaines (Entropy)",extra=101)
+
+pdf("Arbre Pruned pour tous les secteurs (Entropy)")
+rpart.plot(pruned_tree_sector_entropy,main="Arbre Pruned pour tous les domaines (Entropy)",extra=101)
+dev.off()
+
+#Pour Gini
+
+cp_best_sector_gini=decision_tree_sector_large_gini$cptable[which.min(decision_tree_sector_large_gini$cptable[,"xerror"]),"CP"]
+
+print(cp_best_sector_gini)
+
+pruned_tree_sector_gini=prune(decision_tree_sector_large_gini,cp= cp_best_sector_gini)
+
+rpart.plot(pruned_tree_sector_gini,main="Arbre Pruned pour tous les domaines (Gini)",extra=101) 
+
+pdf("Arbre Pruned pour tous les secteurs (Gini)")
+rpart.plot(pruned_tree_sector_gini,main="Arbre Pruned pour tous les domaines (Gini)",extra=101)
+dev.off()
+
+#règle 1SE
+pruned_tree_sector_gini_1SE=prune(decision_tree_sector_large_gini,cp= 0.0010604)
+
+rpart.plot(pruned_tree_sector_gini_1SE,main="Arbre Pruned 1SE pour tous les domaines (Gini)",extra=101) 
+
+pdf(" 1SE Arbre Pruned pour tous les secteurs (Gini)")
+rpart.plot(pruned_tree_sector_gini_1SE,main="Arbre Pruned 1SE pour tous les domaines (Gini)",extra=101)
+dev.off()
+```
+#Pour établir nos règles 
+```{r}
+rpart.rules(pruned_tree_sector_gini_1SE, cover=TRUE)
+```
+#Nous sauvegardons notre tableau au format excel
+
+```{r}
+rules<-rpart.rules(pruned_tree_sector_gini_1SE, cover=TRUE)
+library(writexl)
+
+rules_df <- as.data.frame(rules)
+
+
+writexl::write_xlsx(rules_df, path = "C:/Users/edgar/Desktop/R memoire/rules_sector.xlsx")
+```
+
+#Testons la performance de nos arbres pruned
+
+```{r}
+#Pour Gini
+
+predictions_sector_gini_pruned=predict(pruned_tree_sector_gini,newdata=base_de_donnee_final_sector_positive.training,type="class") 
+
+actuals_sector=base_de_donnee_final_sector_positive.training$sharing
+
+confusion.matrix.training_sector_gini_pruned=table(actuals_sector,predictions_sector_gini_pruned)
+
+print(confusion.matrix.training_sector_gini_pruned)
+
+#Pour Entropy
+
+predictions_sector_entropy_pruned=predict(pruned_tree_sector_entropy,newdata=base_de_donnee_final_sector_positive.training,type="class")  
+
+actuals_sector=base_de_donnee_final_sector_positive.training$sharing
+
+confusion.matrix.training_sector_entropy_pruned=table(actuals_sector,predictions_sector_entropy_pruned)
+
+print(confusion.matrix.training_sector_entropy_pruned)
+
+
+#Afficher l'indicateur de précision, et le coefficient Kappa de Cohen
+
+#Pour gini
+
+accuracy.training_sector_gini_pruned=sum(diag(confusion.matrix.training_sector_gini_pruned))/sum(confusion.matrix.training_sector_gini_pruned)
+
+print(accuracy.training_sector_gini_pruned) 
+#
+CohenKappa(confusion.matrix.training_sector_gini_pruned, conf.level = 0.95)
+
+#Pour entropy
+
+accuracy.training_sector_entropy_pruned=sum(diag(confusion.matrix.training_sector_entropy_pruned))/sum(confusion.matrix.training_sector_entropy_pruned)
+
+print(accuracy.training_sector_entropy_pruned)
+#
+CohenKappa(confusion.matrix.training_sector_entropy_pruned, conf.level = 0.95)
+```
+
+##Refaisons les calculs pour l'arbre pruned suivant la règle 1SE 
+
+```{r}
+
+#Pour éviter a devoir changer tout le code on va juste remplacer notre arbre pruned par l'arbre pruned 1SE
+
+pruned_tree_sector_gini<-pruned_tree_sector_gini_1SE
+
+#
+
+predictions_sector_gini_pruned=predict(pruned_tree_sector_gini,newdata=base_de_donnee_final_sector_positive.training,type="class") 
+
+actuals_sector=base_de_donnee_final_sector_positive.training$sharing
+
+confusion.matrix.training_sector_gini_pruned=table(actuals_sector,predictions_sector_gini_pruned)
+
+print(confusion.matrix.training_sector_gini_pruned)
+
+#
+
+accuracy.training_sector_gini_pruned=sum(diag(confusion.matrix.training_sector_gini_pruned))/sum(confusion.matrix.training_sector_gini_pruned)
+
+print(accuracy.training_sector_gini_pruned) 
+#
+CohenKappa(confusion.matrix.training_sector_gini_pruned, conf.level = 0.95)
+
+```
+
+#Maintenant que nous avons relevé notre indicateur de précision en fonction de notre "Training" dataset nous allons le refaire mais cette fois ci avec le "validation" dataset
+
+```{r}
+#Pour Gini
+
+predictions_sector_gini_pruned=predict(pruned_tree_sector_gini,newdata=base_de_donnee_final_sector_positive.validation,type="class")  
+
+actuals_sector=base_de_donnee_final_sector_positive.validation$sharing
+
+confusion.matrix.validation_sector_gini_pruned=table(actuals_sector,predictions_sector_gini_pruned)
+
+print(confusion.matrix.validation_sector_gini_pruned) 
+
+
+#Pour Entropy
+
+predictions_sector_entropy_pruned=predict(pruned_tree_sector_entropy,newdata=base_de_donnee_final_sector_positive.validation,type="class")  
+
+actuals_sector=base_de_donnee_final_sector_positive.validation$sharing
+
+confusion.matrix.validation_sector_entropy_pruned=table(actuals_sector,predictions_sector_entropy_pruned)
+
+print(confusion.matrix.validation_sector_entropy_pruned)
+
+
+#afficher l'indicateur de précision, et le coefficient Kappa de Cohen
+
+#pour gini
+
+accuracy.validation_sector_gini_pruned=sum(diag(confusion.matrix.validation_sector_gini_pruned))/sum(confusion.matrix.validation_sector_gini_pruned)
+
+print(accuracy.validation_sector_gini_pruned) 
+
+CohenKappa(confusion.matrix.validation_sector_gini_pruned, conf.level = 0.95)
+
+#pour entropy
+
+accuracy.validation_sector_entropy_pruned=sum(diag(confusion.matrix.validation_sector_entropy_pruned))/sum(confusion.matrix.validation_sector_entropy_pruned)
+
+print(accuracy.validation_sector_entropy_pruned) 
+
+CohenKappa(confusion.matrix.validation_sector_entropy_pruned, conf.level = 0.95)
+
+```
+
+#Maintenant que nous avons relevé nos indicateurs de performances en fonction de notre “validation dataset”, nous allons le refaire mais cette fois-ci avec le “Test dataset”.
+
+```{r}
+#Pour Gini
+
+predictions_sector_gini_pruned=predict(pruned_tree_sector_gini,newdata=base_de_donnee_final_sector_positive.test,type="class")  
+
+actuals_sector=base_de_donnee_final_sector_positive.test$sharing
+
+confusion.matrix.test_sector_gini_pruned=table(actuals_sector,predictions_sector_gini_pruned)
+
+print(confusion.matrix.test_sector_gini_pruned) 
+
+
+#Pour Entropy
+
+predictions_sector_entropy_pruned=predict(pruned_tree_sector_entropy,newdata=base_de_donnee_final_sector_positive.test,type="class")  
+
+actuals_sector=base_de_donnee_final_sector_positive.test$sharing
+
+confusion.matrix.test_sector_entropy_pruned=table(actuals_sector,predictions_sector_entropy_pruned)
+
+print(confusion.matrix.test_sector_entropy_pruned)
+
+
+#afficher l'indicateur de précision, et le coefficient de Kappa de Cohen
+
+#pour gini
+
+accuracy.test_sector_gini_pruned=sum(diag(confusion.matrix.test_sector_gini_pruned))/sum(confusion.matrix.test_sector_gini_pruned)
+
+print(accuracy.test_sector_gini_pruned) 
+
+CohenKappa(confusion.matrix.test_sector_gini_pruned, conf.level = 0.95)
+
+#pour entropy
+
+accuracy.test_sector_entropy_pruned=sum(diag(confusion.matrix.test_sector_entropy_pruned))/sum(confusion.matrix.test_sector_entropy_pruned)
+
+print(accuracy.test_sector_entropy_pruned) 
+
+CohenKappa(confusion.matrix.test_sector_entropy_pruned, conf.level = 0.95)
+```
+
+#Maintenant que nous avons obtenu notre arbre nous allons pouvoir tester son efficacité en calculant l’AUCs.
+
+```{r}
+
+#Calcul de l'AUC multiclasse selon Hand and Till (2001)
+
+#Pour l’entropy
+
+#pour le Training dataset
+
+predictions <- predict(pruned_tree_sector_entropy, base_de_donnee_final_sector_positive.training, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sector_positive.training$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_training_entropy<-auc(roc.multi.arbre)
+
+# pour le Validation dataset
+
+predictions <- predict(pruned_tree_sector_entropy, base_de_donnee_final_sector_positive.validation, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sector_positive.validation$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_validation_entropy<-auc(roc.multi.arbre)
+
+# pour le test dataset
+
+predictions <- predict(pruned_tree_sector_entropy, base_de_donnee_final_sector_positive.test, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sector_positive.test$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_test_entropy<-auc(roc.multi.arbre)
+```
+```{r}
+#Pour Gini
+
+#pour le Training dataset
+
+predictions <- predict(pruned_tree_sector_gini, base_de_donnee_final_sector_positive.training, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sector_positive.training$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_training_gini<-auc(roc.multi.arbre)
+
+# pour le Validation dataset
+
+predictions <- predict(pruned_tree_sector_gini, base_de_donnee_final_sector_positive.validation, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sector_positive.validation$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_validation_gini<-auc(roc.multi.arbre)
+
+# pour le test dataset
+
+predictions <- predict(pruned_tree_sector_gini, base_de_donnee_final_sector_positive.test, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sector_positive.test$sharing, predictions)
+auc(roc.multi.arbre)
+Pruned_test_gini<-auc(roc.multi.arbre)
+```
+
+##Maintenant que nous avons réalisé des arbres avec des paramètres subjectifs et objectifs nous allons dorénavant passer au Random forest (forêt aléatoire).
+
+Note:la library Random forest ne prend en compte que l'index de gini (Jacquet 2022) 
+
+
+```{r}
+set.seed(seed)
+
+base_de_donnee_final_sector_positive.training$sharing <- as.factor(base_de_donnee_final_sector_positive.training$sharing)
+
+str(base_de_donnee_final_sector_positive.training$sharing)
+class(base_de_donnee_final_sector_positive.training$sharing)
+
+random_forest_sector=randomForest(data=base_de_donnee_final_sector_positive.training,sharing~.,ntree=200,sampsize=60,replace=TRUE,mtry=2,method="class", weights=weights)
+
+print(random_forest_sector)
+```
+
+```{r}
+
+X <- base_de_donnee_final_sector_positive.training[, -which(names(base_de_donnee_final_sector_positive.training) == "sharing")]
+Y <- base_de_donnee_final_sector_positive.training$sharing
+
+set.seed(seed)
+
+best_mtry <- tuneRF(
+  x          = X,
+  y          = Y,
+  mtryStart =,
+  ntreeTry   = 50,
+  stepFactor = 2,
+  improve    = 0.05,
+  trace      = TRUE,
+  plot = TRUE,
+  doBest=FALSE
+)
+
+# Afficher le résultat
+print(best_mtry)
+
+
+#On se rend compte que le meilleur hyperparamètre pour le mtry c'est 2
+
+
+```
+
+```{r}
+
+plot(random_forest_sector)
+legend("top",cex=0.8,legend=colnames(random_forest_sector$err.rate),lty=c(1,2,3,4,5),col=c(1,2,3,4,5),horiz=T) #car nous avons 5 classes
+
+```
+
+```{r}
+set.seed(seed)
+
+random_forest_tuned_sector=randomForest(data=base_de_donnee_final_sector_positive.training,sharing~.,ntree=125,sampsize=60,replace=TRUE,mtry=2, weights=weights) #penser à changer le ntree et mtry en fonction des résultats obtenus (dans notre cas 125 et 2)
+
+```
+
+#On essaye de voir si nous obtenons une difference de résultat si nous appliquons l'importance de permutation tel que présenté par Parr et al. (2018)
+```{r}
+set.seed(seed)
+
+random_forest_tuned_sector_permutation=randomForest(data=base_de_donnee_final_sector_positive.training,sharing~.,ntree=125,sampsize=60,replace=TRUE,mtry=2, weights=weights, importance=T)
+```
+
+
+#afficher l’indicateur de précision, et le coefficient Kappa de Cohen pour la Forêt Aléatoire
+
+```{r}
+predictions_random=predict(random_forest_tuned_sector,newdata=base_de_donnee_final_sector_positive.training,type="class")
+
+actuals=base_de_donnee_final_sector_positive.training$sharing
+
+confusion.matrix.training_random=table(actuals,predictions_random)
+
+print(confusion.matrix.training_random)
+
+
+accuracy.training_random=sum(diag(confusion.matrix.training_random))/sum(confusion.matrix.training_random)
+
+print(accuracy.training_random)
+
+CohenKappa(confusion.matrix.training_random, conf.level = 0.95)
+```
+
+#Maintenant testons son efficacité avec le dataset de validation
+
+```{r}
+predictions_random=predict(random_forest_tuned_sector,newdata=base_de_donnee_final_sector_positive.validation,type="class")
+
+actuals=base_de_donnee_final_sector_positive.validation$sharing
+
+confusion.matrix.validation_random=table(actuals,predictions_random)
+
+print(confusion.matrix.validation_random)
+
+accuracy.validation_random=sum(diag(confusion.matrix.validation_random))/sum(confusion.matrix.validation_random)
+
+print(accuracy.validation_random) 
+
+CohenKappa(confusion.matrix.validation_random, conf.level = 0.95)
+```
+
+```{r}
+importance(random_forest_tuned_sector)
+```
+
+```{r}
+varImpPlot(random_forest_tuned_sector, main= 'Forêts Aléatoires pour tous les domaines')
+```
+# On affiche nos résultat pour la permutation d'importance
+```{r}
+importance(random_forest_tuned_sector_permutation, type=1)
+```
+
+```{r}
+varImpPlot(random_forest_tuned_sector_permutation, type=1, main= 'Forêts Aléatoires pour tous les domaines politiques')
+```
+
+
+#Maintenant testons son efficacité avec le dataset de test
+
+```{r}
+predictions_random_test=predict(random_forest_tuned_sector,newdata=base_de_donnee_final_sector_positive.test,type="class")
+
+actuals_test=base_de_donnee_final_sector_positive.test$sharing
+
+confusion.matrix.test_random=table(actuals_test,predictions_random_test)
+
+print(confusion.matrix.test_random)
+
+#vérification de la précision et du coefficient Kappa de Cohen
+
+accuracy.test_random=sum(diag(confusion.matrix.test_random))/sum(confusion.matrix.test_random)
+
+print(accuracy.test_random) 
+
+CohenKappa(confusion.matrix.test_random, conf.level = 0.95)
+
+```
+
+#Maintenant que nous avons obtenu notre arbre nous allons pouvoir tester son efficacité en calculant l’AUCs.
+
+```{r}
+
+#pour le Training dataset
+
+predictions <- predict(random_forest_tuned_sector, base_de_donnee_final_sector_positive.training, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sector_positive.training$sharing, predictions)
+auc(roc.multi.arbre)
+Random_training<-auc(roc.multi.arbre)
+
+# pour le Validation dataset
+
+predictions <- predict(random_forest_tuned_sector, base_de_donnee_final_sector_positive.validation, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sector_positive.validation$sharing, predictions)
+auc(roc.multi.arbre)
+Random_validation<-auc(roc.multi.arbre)
+
+# pour le test dataset
+
+predictions <- predict(random_forest_tuned_sector, base_de_donnee_final_sector_positive.test, type = 'prob')
+
+roc.multi.arbre <- multiclass.roc(base_de_donnee_final_sector_positive.test$sharing, predictions)
+auc(roc.multi.arbre)
+Random_test<-auc(roc.multi.arbre)
+```
+
+###Nous avons fini notre analyse pour l'arbre de classification maintenant nous allons passer a une méthode statistique plus classique pour pouvoir comparer nos Modèles.
+
+##Régression logistique ordinale pour tous les domaines 
+
+<https://stats.oarc.ucla.edu/r/dae/ordinal-logistic-regression/> 
+#(UCLA, Statistical Methods and Data Analytics group, s. d.)
+
+```{r}
+
+#Les libraries nécessaire a sa réalisation 
+
+library(foreign)
+library(ggplot2)
+library(MASS)
+library(Hmisc)
+library(reshape2)
+library(tidyverse)
+library(car)
+
+```
+
+```{r}
+sector <- polr(sharing~ Sprache+ S1+ std2_trust_fg+ std2_importance+ std2_apps_all+ std2_leftright+ std2_education+ std2_risk+ std2_age+ sector, data = base_de_donnee_final_sector_positive.training, Hess=TRUE, weights=weights) 
+```
+
+```{r}
+summary(sector)
+vif(sector)
+
+summary(sector$model)
+sector$converged
+
+(ctable_sector <- coef(summary(sector)))
+```
+
+#Au-dessus nous avons obtenu certains résultats mais essayons d'obtenir une p-valeur
+
+```{r}
+p <- pnorm(abs(ctable_sector[, "t value"]), lower.tail = FALSE) * 2
+
+(ctable_sector <- cbind(ctable_sector, "p value" = p))
+
+(ci <- confint(sector, level=0.95))
+
+confint.default(sector, level=0.95)
+
+```
+
+```{r}
+#Nous sauvegardons notre tableau au format excel
+
+tab<-(ctable_sector <- cbind(ctable_sector, "p value" = p))
+library(writexl)
+
+tab_df <- as.data.frame(tab)
+
+
+writexl::write_xlsx(tab_df, path = "C:/Users/edgar/Desktop/R memoire/tableau_p_sector.xlsx")
+
+```
+
+```{r}
+#"[...] convert the coefficients into odds ratios" (UCLA, Statistical Methods and Data Analytics group, s. d.)
+
+exp(coef(sector))
+exp(cbind(OR = coef(sector), ci)) 
+
+```
+
+```{r}
+#Nous sauvegardons notre tableau au format excel
+
+tab_OR<-exp(cbind(OR = coef(sector), ci)) 
+
+tab_df_OR <- as.data.frame(tab_OR)
+
+writexl::write_xlsx(tab_df_OR, path = "C:/Users/edgar/Desktop/R memoire/tableau_OR_sector.xlsx")
+
+```
+
+## On va tester la "proportional odds assumption"
+
+```{r}
+sf <- function(y) { c('Y>=1' = qlogis(mean(y >= 1)), 'Y>=2' = qlogis(mean(y >= 2)),  'Y>=3' = qlogis(mean(y >= 3)), 'Y>=4' =qlogis(mean(y >= 4)), 'Y>=5' =qlogis(mean(y >= 5)))} #ou Y représente notre variable dépendante
+
+
+(s <- with(base_de_donnee_final_sector_positive.training, summary(as.numeric(sharing) ~ Sprache + S1 +  std2_trust_fg +  std2_importance +  std2_apps_all +  std2_leftright +  std2_education +  std2_risk +  std2_age+ sector, fun=sf)))
+
+
+#
+
+glm(I(as.numeric(sharing) >= 2) ~ Sprache, family="binomial", data = base_de_donnee_final_sector_positive.training)
+glm(I(as.numeric(sharing) >= 3) ~ Sprache, family="binomial", data = base_de_donnee_final_sector_positive.training)
+
+    
+glm(I(as.numeric(sharing) >= 2) ~ S1, family="binomial", data = base_de_donnee_final_sector_positive.training)
+glm(I(as.numeric(sharing) >= 3) ~ S1, family="binomial", data = base_de_donnee_final_sector_positive.training)
+
+```
+
+```{r}
+s[, 4] <- s[, 4] - s[, 3]
+s[, 3] <- s[, 3] - s[, 3]
+
+print(s[,3:4]) 
+```
+
+```{r}
+plot(s, which=1:5, xlab='logit', main='parallel slopes assumption sector', xlim=range(s[,3:4]), cex.axis=0.2,cex.lab=0.4,cex.main=0.2) #which=1:5 car nous avons 5 catégories dans notre variable dépendante
+
+pdf("parallel slopes assumption sector")
+plot(s, which=1:5, xlab='logit', main='parallel slopes assumption sector', xlim=range(s[,3:4]), cex.axis=0.2,cex.lab=0.4,cex.main=0.2)
+dev.off()
+
+#Au vu du graphique bien qu'il semble avoir une forte variance dans la variable st2d_importance, st2d_trust_fg st2d_leftright, et st2d_age il nous semble que la "parallel slopes assumption" est raisonnable
+```
+
+#Nous faisons une matrice de confusion, l’indicateur de précision et l’index de kappa de Cohen pour notre régression logistique pour pouvoir la comparer avec notre arbre de classification donc on fait pour le “training dataset” puis avec celui de “validation” et finalement de “test”.
+
+#Pour calculer notre matrice et la précision nous avons adaptés le code présenté par Analytics (2019)
+
+```{r}
+#pour le jeu de donnée de training
+
+predict_reg_training = predict(sector,base_de_donnee_final_sector_positive.training)
+table(base_de_donnee_final_sector_positive.training$sharing, predict_reg_training)
+accuracy_reg_training <- mean(as.character(base_de_donnee_final_sector_positive.training$sharing) == as.character(predict_reg_training))
+print(accuracy_reg_training)
+
+#pour la validation 
+
+predict_reg_validation = predict(sector,base_de_donnee_final_sector_positive.validation)
+table(base_de_donnee_final_sector_positive.validation$sharing, predict_reg_validation)
+accuracy_reg_validation <- mean(as.character(base_de_donnee_final_sector_positive.validation$sharing) == as.character(predict_reg_validation))
+print(accuracy_reg_validation)
+
+
+#pour le test 
+
+predict_reg_test = predict(sector,base_de_donnee_final_sector_positive.test)
+table(base_de_donnee_final_sector_positive.test$sharing, predict_reg_test)
+accuracy_reg_test <- mean(as.character(base_de_donnee_final_sector_positive.test$sharing) == as.character(predict_reg_test))
+print(accuracy_reg_test)
+
+```
+
+```{r}
+#Maintenant calculons le coefficient de Kappa de Cohen pour notre régression logistique ordinale
+
+#training dataset
+
+predict_reg_training = predict(sector,base_de_donnee_final_sector_positive.training)
+confusion.matrix.training_sector_reg=table(base_de_donnee_final_sector_positive.training$sharing, predict_reg_training)
+CohenKappa(confusion.matrix.training_sector_reg, conf.level = 0.95)
+
+#validation dataset
+
+predict_reg_validation = predict(sector,base_de_donnee_final_sector_positive.validation)
+confusion.matrix.validation_sector_reg=table(base_de_donnee_final_sector_positive.validation$sharing, predict_reg_validation)
+CohenKappa(confusion.matrix.validation_sector_reg, conf.level = 0.95)
+
+#Test dataset
+
+predict_reg_test = predict(sector,base_de_donnee_final_sector_positive.test)
+confusion.matrix.test_sector_reg=table(base_de_donnee_final_sector_positive.test$sharing, predict_reg_test)
+CohenKappa(confusion.matrix.test_sector_reg, conf.level = 0.95)
+```
+
+
+#Pour l'arbre pruned (Gini)
+
+```{r}
+print(confusion.matrix.training_sector_gini_pruned)
+print(accuracy.training_sector_gini_pruned)
+
+print(confusion.matrix.validation_sector_gini_pruned)
+print(accuracy.validation_sector_gini_pruned)
+```
+
+#Pour le random forest (Gini)
+
+```{r}
+print(confusion.matrix.training_random)
+print(accuracy.training_random) 
+
+print(confusion.matrix.validation_random)
+print(accuracy.validation_random) 
+```
+
+```{r}
+library(kableExtra)
+
+df_1 <- data.frame(
+  Modèle = c("Régression logistique ordinale", "Arbre pruned", "Forêt aléatoire"), 
+  Training = c(accuracy_reg_training, accuracy.training_sector_gini_pruned, accuracy.training_random), 
+  Validation = c(accuracy_reg_validation, accuracy.validation_sector_gini_pruned, accuracy.validation_random), 
+  Test = c(accuracy_reg_test, accuracy.test_sector_gini_pruned, accuracy.test_random)
+)
+df_1
+
+
+predict_reg_training
+
+tableau <- kable(df_1, format = "html", table.attr = "style='width:70%;'") %>%
+  kable_styling(bootstrap_options = c("responsive"))
+
+print(tableau)
+#"The fact that training and testing accuracy are almost equal tells us that there is no overfitting kind of scenario." (Ramasubramanian et Singh 2019, 357)
+```
+
+#Calcul de l’AUC multiclasse selon Hand and Till (2001) pour notre régression logisitique ordinale.
+
+```{r}
+
+#Pour le dataset de training 
+
+training_prob = predict(sector, newdata= base_de_donnee_final_sector_positive.training, type = "prob")
+
+roc.multi_regression <- multiclass.roc(base_de_donnee_final_sector_positive.training$sharing, training_prob)
+auc(roc.multi_regression)
+Reg_training<-auc(roc.multi_regression)
+
+# pour le dataset de validation 
+validation_prob = predict(sector, newdata= base_de_donnee_final_sector_positive.validation, type = "prob")
+
+roc.multi_regression <- multiclass.roc(base_de_donnee_final_sector_positive.validation$sharing, validation_prob)
+auc(roc.multi_regression)
+Reg_validation<-auc(roc.multi_regression)
+
+#pour le dataset de test 
+test_prob = predict(sector, newdata= base_de_donnee_final_sector_positive.test, type = "prob")
+
+roc.multi_regression <- multiclass.roc(base_de_donnee_final_sector_positive.test$sharing, test_prob)
+auc(roc.multi_regression)
+Reg_test<-auc(roc.multi_regression)
+
+```
+
+```{r}
+df_2 <- data.frame(
+  Modèle = c("Régression logistique ordinale", "Arbre pruned", "Forêt aléatoire"), 
+  Training = c(Reg_training, Pruned_training_gini, Random_training), 
+  Validation = c(Reg_validation,  Pruned_validation_gini, Random_validation), 
+  Test = c(Reg_test, Pruned_test_gini, Random_test)
+)
+df_2
+
+
+predict_reg_training
+
+tableau <- kable(df_2, format = "html", table.attr = "style='width:70%;'") %>%
+  kable_styling(bootstrap_options = c("responsive"))
+
+print(tableau)
+
+```
+
+#Nous Rassemblons justes tous nos indicateurs Kappa de Cohen pour faire notre tableau
+
+#Arbre Pruned
+```{r}
+CohenKappa(confusion.matrix.training_sector_gini_pruned, conf.level = 0.95)
+CohenKappa(confusion.matrix.validation_sector_gini_pruned, conf.level = 0.95)
+CohenKappa(confusion.matrix.test_sector_gini_pruned, conf.level = 0.95)
+
+```
+#Random Forest
+```{r}
+CohenKappa(confusion.matrix.training_random, conf.level = 0.95)
+CohenKappa(confusion.matrix.validation_random, conf.level = 0.95)
+CohenKappa(confusion.matrix.test_random, conf.level = 0.95)
+```
+#Régression logistique ordinale
+
+```{r}
+CohenKappa(confusion.matrix.training_sector_reg, conf.level = 0.95)
+CohenKappa(confusion.matrix.validation_sector_reg, conf.level = 0.95)
+CohenKappa(confusion.matrix.test_sector_reg, conf.level = 0.95)
+```
