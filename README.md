@@ -1,4 +1,4 @@
-# Mémoire_ML
+# Mémoire_ML_Arbre_de_décision
 
 Vous retrouvez ici l'ensemble du code R qui m'a permis l'élaboration de mon mémoire dans le cadre de la validation de mon master en Politique et management publics dispensé par l'IDHEAP
 
