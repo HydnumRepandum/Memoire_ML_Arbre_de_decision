@@ -1,18 +1,30 @@
-# Mémoire_ML_Arbre_de_décision
+# Mémoire ML – Arbres de décision
 
-Vous retrouvez ici l'ensemble du code R qui m'a permis l'élaboration de mon mémoire dans le cadre de la validation de mon master en Politique et management publics dispensé par l'IDHEAP
+Ce dépôt contient l’ensemble du code R utilisé pour la rédaction de mon mémoire de Master en Politique et management publics (IDHEAP).
 
-## Structure du dépot:
+---
 
-Dans la branche principale, vous trouverez le code R (au format Markdown) pour chaque domaine de politique publique analysé, ainsi qu'une analyse commune intégrant tous les domaines lorsque ceux-ci sont fusionnés.
+## Structure du dépôt
 
-__sante.Rmd__: Pour le domaine de la santé  
-__banque.Rmd__: Pour le domaine bancaire  
-__security.Rmd__: Pour le domaine sécuritaire  
-__social.Rmd__: Pour le domaine de l'aide sociale  
-__tous_secteurs.Rmd__: Lorsque que tous les domaine précédemment sont fusionnés ensemble  
+La branche principale comprend cinq fichiers R Markdown, chacun dédié à un secteur de politique publique :
 
-Le document pour le domaine de la santé est substnatiellement plus long que pour les autres domaines car les commentaires sont plus nombreux et précis.
+- **sante.Rmd** : secteur de la santé  
+- **banque.Rmd** : secteur bancaire  
+- **securite.Rmd** : secteur sécuritaire  
+- **social.Rmd** : secteur de l’aide sociale  
+- **tous_secteurs.Rmd** : fusion de tous les secteurs précédents  
+
+> Le fichier _sante.Rmd_ est plus détaillé, avec des commentaires et des explications supplémentaires.
+
+---
+
+## Abstract
+
+Ce travail illustre l’application des arbres de décision (arbres élagués et forêts aléatoires) en sciences sociales. À partir d’un sondage en ligne, il vise à prédire le profil des citoyen·ne·s suisses susceptibles de partager leurs données personnelles avec le gouvernement, afin d’optimiser l’élaboration des politiques publiques.
+
+Nous comparons les performances de ces méthodes aux régressions statistiques classiques (logistique ordinale et linéaire). Si les arbres révèlent des interactions complexes entre variables indépendantes, leurs performances absolues restent limitées, ce qui réduit les implications pratiques de notre étude.
+
+---
 
 ## Résumé du mémoire:
 
